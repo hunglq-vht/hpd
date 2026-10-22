@@ -11,6 +11,7 @@ open its info form, a pulsing ring and camera follow.
 | ![world clusters](docs/img/clusters-world.jpg) | ![city clusters](docs/img/clusters-city.jpg) |
 | ![realtime + selection](docs/img/realtime-selected.jpg) | ![216k live tracks stress test](docs/img/stress-216k.jpg) |
 
+* **Implementation details** (how clusters are built and drawn, how the map handles many live tracks): [`docs/IMPLEMENTATION.md`](docs/IMPLEMENTATION.md)
 * **Assessment of the approach** (advantages, drawbacks, mitigations): [`docs/ASSESSMENT.md`](docs/ASSESSMENT.md)
 * **The tiling agreement, subjects, binary format and HTTP API**: [`docs/PROTOCOL.md`](docs/PROTOCOL.md)
 * **Measured performance of the frontend listening to NATS**: [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md)
@@ -106,5 +107,5 @@ frontend/
   src/components         toolbar, performance HUD, selected-track form
   bench                  ws-bench.ts (Node), browser-bench.ts (Playwright + Chrome)
 nats/nats.conf           websocket, limits, users and permissions
-docs/                    assessment, protocol, performance
+docs/                    implementation, assessment, protocol, performance
 ```
