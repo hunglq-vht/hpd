@@ -1,9 +1,11 @@
-import type { Controller, UiState } from "../map/controller.ts";
+import { useTrackingActions, useUiState } from "../map/TrackingProvider.tsx";
 import { KIND_COLORS, KIND_NAMES } from "../map/droneAtlas.ts";
 
 const CARDINALS = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
 
-export function TrackPanel({ state: s, controller }: { state: UiState; controller: Controller }) {
+export function TrackPanel() {
+  const s = useUiState();
+  const { select, setFollow } = useTrackingActions();
   const t = s.selected;
   const lost = s.selectionLost;
   const kind = t ? Math.min(3, t.kind) : 0;
@@ -16,7 +18,7 @@ export function TrackPanel({ state: s, controller }: { state: UiState; controlle
           <p className="muted">{t ? KIND_NAMES[kind] : "waiting for data…"}</p>
         </div>
         <span className={`badge ${lost ? "bad" : "ok"}`}>{lost ? "signal lost" : "live"}</span>
-        <button className="icon-btn" onClick={() => controller.select(null)} aria-label="Close (Esc)" title="Close (Esc)">
+        <button className="icon-btn" onClick={() => select(null)} aria-label="Close (Esc)" title="Close (Esc)">
           ×
         </button>
       </header>
@@ -40,7 +42,7 @@ export function TrackPanel({ state: s, controller }: { state: UiState; controlle
 
       <footer>
         <label className="toggle">
-          <input type="checkbox" checked={s.follow} onChange={(e) => controller.setFollow(e.target.checked)} />
+          <input type="checkbox" checked={s.follow} onChange={(e) => setFollow(e.target.checked)} />
           <span>Follow</span>
         </label>
         <span className="muted small">Drag to stop following · Esc to close</span>

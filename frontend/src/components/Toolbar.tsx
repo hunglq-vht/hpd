@@ -1,5 +1,5 @@
-import type { Controller, UiState } from "../map/controller.ts";
-import { compact } from "../map/controller.ts";
+import { compact, type UiState } from "../map/tracking.ts";
+import { useTracking, useTrackingActions, useUiState } from "../map/TrackingProvider.tsx";
 import { CITIES } from "../cities.ts";
 
 const MARGINS: { v: number; label: string }[] = [
@@ -10,7 +10,10 @@ const MARGINS: { v: number; label: string }[] = [
   { v: 2, label: "2" },
 ];
 
-export function Toolbar({ state: s, controller }: { state: UiState; controller: Controller }) {
+export function Toolbar() {
+  const s = useUiState();
+  const { cfg } = useTracking();
+  const actions = useTrackingActions();
   const total = s.cluster?.total;
   const connected = s.status.state === "connected";
   return (
@@ -25,7 +28,7 @@ export function Toolbar({ state: s, controller }: { state: UiState; controller: 
         <div>
           <h1>Drone Tracks</h1>
           <p className="muted">
-            {total ? `${total.toLocaleString()} drones live` : "1M drones"} · {controller.cfg.publishIntervalMs / 1000}s ticks
+            {total ? `${total.toLocaleString()} drones live` : "1M drones"} · {cfg.publishIntervalMs / 1000}s ticks
           </p>
         </div>
         <span className={`dot ${connected ? "ok" : s.status.state === "error" ? "bad" : "warn"}`} title={`NATS ${s.status.state} ${s.status.detail ?? ""}`} />
@@ -40,7 +43,7 @@ export function Toolbar({ state: s, controller }: { state: UiState; controller: 
             value=""
             onChange={(e) => {
               const c = CITIES.find((x) => x.name === e.target.value);
-              if (c) controller.flyTo(c.lon, c.lat, 13.6);
+              if (c) actions.flyTo(c.lon, c.lat, 13.6);
             }}
           >
             <option value="" disabled>
@@ -51,7 +54,7 @@ export function Toolbar({ state: s, controller }: { state: UiState; controller: 
             ))}
           </select>
         </label>
-        <button className="btn" onClick={() => void controller.flyToHottest()} title="Fly to the z13 tile with the most drones">
+        <button className="btn" onClick={() => void actions.flyToHottest()} title="Fly to the z13 tile with the most drones">
           Densest tile
         </button>
       </div>
@@ -62,7 +65,7 @@ export function Toolbar({ state: s, controller }: { state: UiState; controller: 
         </span>
         <div className="seg" role="group" aria-label="Prefetch margin">
           {MARGINS.map((m) => (
-            <button key={m.v} className={s.margin === m.v ? "on" : ""} onClick={() => controller.setMargin(m.v)}>
+            <button key={m.v} className={s.margin === m.v ? "on" : ""} onClick={() => actions.setMargin(m.v)}>
               {m.label}
             </button>
           ))}
@@ -71,7 +74,7 @@ export function Toolbar({ state: s, controller }: { state: UiState; controller: 
 
       <label className="field" title="Ignore the viewport and subscribe to the densest tiles, or to tracks.> (every drone)">
         <span>Stress test</span>
-        <select value={s.stress} onChange={(e) => void controller.setStress(Number(e.target.value))}>
+        <select value={s.stress} onChange={(e) => void actions.setStress(Number(e.target.value))}>
           <option value={0}>Off (viewport topics)</option>
           <option value={100}>Densest 100 tiles</option>
           <option value={400}>Densest 400 tiles</option>
@@ -80,7 +83,7 @@ export function Toolbar({ state: s, controller }: { state: UiState; controller: 
       </label>
 
       {s.mode === "cluster" && <p className="hint">Zoom to 13+ or click a cluster to see individual drones.</p>}
-      {s.mode !== "cluster" && s.topics?.truncated && <p className="hint warn">Topic list capped at {controller.cfg.maxTopics} tiles.</p>}
+      {s.mode !== "cluster" && s.topics?.truncated && <p className="hint warn">Topic list capped at {cfg.maxTopics} tiles.</p>}
       {s.error && <p className="hint bad">{s.error}</p>}
     </section>
   );

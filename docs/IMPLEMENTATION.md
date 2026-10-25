@@ -22,11 +22,26 @@ document explains how the code uses them.
 | Data | `GET /api/stats` every tick and after every move | NATS subscriptions to `tracks.13.x.y` |
 | Volume on the wire | a few hundred cells as JSON | 20–40 k tracks/s, about 0.4 MB/s over a dense city |
 | Drawn by | MapLibre `circle` + `symbol` layers on a GeoJSON source | custom WebGL2 layer (`TrackLayer`) |
-| Code | `controller.ts` `loadClusters`, `App.tsx` layers | `tracks.worker.ts`, `trackStore.ts`, `TrackLayer.ts` |
+| Code | `ViewportSync.tsx` `loadClusters`, `ClusterLayers.tsx` | `tracks.worker.ts`, `trackStore.ts`, `TrackLayer.ts`, `DroneLayer.tsx` |
 
-`Controller.refresh()` (`frontend/src/map/controller.ts`) picks the mode from `map.getZoom()` on
-every (debounced) camera change. A third mode, `stress`, ignores the viewport and subscribes the worker
+`refresh()` in `ViewportSync` (`frontend/src/map/ViewportSync.tsx`) picks the mode from `map.getZoom()`
+on every (debounced) camera change. A third mode, `stress`, ignores the viewport and subscribes the worker
 to the N densest tiles or to `tracks.>`. It exists only for benchmarking.
+
+The UI thread is written as React function components and hooks around one non-React core:
+
+| Piece | Role |
+|---|---|
+| `tracking.ts` `createTracking` | the tracks worker, the `TrackLayer` it feeds, the shared clock and a small UI state store |
+| `TrackingProvider.tsx` | creates the core in an effect and shares it by context; `useUiState` / `useUiSelector` read the store with `useSyncExternalStore`, `useTrackingActions` changes it |
+| `DroneLayer.tsx` | adds the WebGL layer to the map; one `requestAnimationFrame` loop sets the shader clock, follows the selected drone and measures fps |
+| `ViewportSync.tsx` | camera → cluster stats or NATS topics; re-runs when the prefetch margin or stress mode changes |
+| `MapInteractions.tsx` | click picking, drag stops follow, Esc, zoom pivot while following |
+| `ClusterLayers.tsx`, `components/*` | declarative MapLibre layers and the panels |
+
+Per-frame and per-message work never goes through React: the worker, the animation loop and map
+events write the store, and components re-render only when a value they read changes. Every effect
+releases what it creates, so the app also runs under `StrictMode`.
 
 The switch is not a hard cut. When the map crosses zoom 13 upward, the cluster layers stay visible
 until the worker delivers its first non-empty frame, or for 2 s at most (`realtimeReady`), so the map
@@ -124,10 +139,10 @@ calls once per second.
 
 `loadClusters` turns each `[x, y, count, lon, lat]` cell into a GeoJSON point at the centroid, with
 `id = x·65536 + y`, `count`, and a short `label` (`compact()`: `812`, `4.6k`, `23k`, `1.0M`). The whole
-`FeatureCollection` is put into React state, and react-map-gl calls `setData` on the `clusters` source.
+`FeatureCollection` is put into the UI store, and react-map-gl calls `setData` on the `clusters` source.
 A few hundred points per second is a trivial load for MapLibre's GeoJSON worker.
 
-### 3.3 Styling (`App.tsx`)
+### 3.3 Styling (`ClusterLayers.tsx`)
 
 Two layers share the `clusters` source. The circle layer:
 
@@ -158,7 +173,7 @@ into realtime mode. Below zoom 10 it zooms in by 2.5 levels, which splits the cl
 ```mermaid
 flowchart LR
   subgraph ui["UI thread"]
-    ctrl["Controller.refresh"]
+    ctrl["ViewportSync refresh"]
     layer["TrackLayer.setFrame<br/>keep newest frame"] --> gpu["render: upload +<br/>1 instanced draw"]
   end
   topics["/api/topics<br/>z13 cover + ring"]

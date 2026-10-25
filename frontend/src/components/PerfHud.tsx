@@ -1,11 +1,12 @@
 import { useState } from "react";
-import type { UiState } from "../map/controller.ts";
+import { useUiState } from "../map/TrackingProvider.tsx";
 
 const n0 = (v: number) => Math.round(v).toLocaleString();
 const n1 = (v: number) => v.toFixed(1);
 const kb = (v: number) => (v >= 1e6 ? `${(v / 1e6).toFixed(2)} MB/s` : `${(v / 1e3).toFixed(0)} KB/s`);
 
-export function PerfHud({ state: s }: { state: UiState }) {
+export function PerfHud() {
+  const s = useUiState();
   const [open, setOpen] = useState(true);
   const w = s.worker;
   const m = s.main;

@@ -1,3 +1,4 @@
+import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { setWorkerUrl } from "maplibre-gl";
 // MapLibre 6 loads its tile worker relative to its own module URL, which a bundler rewrites.
@@ -9,6 +10,10 @@ import App from "./App.tsx";
 
 setWorkerUrl(maplibreWorkerUrl);
 
-// No StrictMode: the map controller owns a worker and a WebGL layer whose lifetime must match the
-// map's, and StrictMode's double mount in development would tear them down once.
-createRoot(document.getElementById("root")!).render(<App />);
+// The tracks worker, the WebGL layer and the map listeners are created and released by effects, so
+// StrictMode's development double mount only tears them down and builds them again.
+createRoot(document.getElementById("root")!).render(
+  <StrictMode>
+    <App />
+  </StrictMode>,
+);

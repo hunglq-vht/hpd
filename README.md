@@ -103,7 +103,8 @@ backend/
 frontend/
   src/shared             tiles, wire decoder, TrackStore (SoA, swap-remove, GPU segments), metrics
   src/worker             tracks.worker.ts: NATS WebSocket, subscriptions, decode, frames
-  src/map                TrackLayer (WebGL2 custom layer), drone icon atlas, controller
+  src/map                TrackLayer (WebGL2 custom layer), drone icon atlas, tracking core + React provider/hooks,
+                         map components (DroneLayer, ViewportSync, MapInteractions, ClusterLayers)
   src/components         toolbar, performance HUD, selected-track form
   bench                  ws-bench.ts (Node), browser-bench.ts (Playwright + Chrome)
 nats/nats.conf           websocket, limits, users and permissions
