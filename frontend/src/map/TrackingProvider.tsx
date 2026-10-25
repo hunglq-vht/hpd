@@ -4,7 +4,7 @@
 
 import { createContext, useContext, useEffect, useState, useSyncExternalStore, type ReactNode } from "react";
 import { useMap } from "react-map-gl/maplibre";
-import { api, type AppConfig } from "../api.ts";
+import type { AppConfig } from "../api.ts";
 import { lonLatToMerc } from "../shared/tiles.ts";
 import { createTracking, type Stress, type Tracking, type UiState } from "./tracking.ts";
 
@@ -46,7 +46,7 @@ export function useUiSelector<T>(select: (s: UiState) => T): T {
 /** UI actions. Fly-to and stress tests need the map; the others only the store and the worker. */
 export function useTrackingActions() {
   const tracking = useTracking();
-  const { store, live } = tracking;
+  const { source, store, live } = tracking;
   const map = useMap()[MAP_ID]?.getMap();
 
   const flyTo = (lon: number, lat: number, zoom: number) => {
@@ -62,8 +62,8 @@ export function useTrackingActions() {
     async setStress(stress: Stress) {
       if (!map) return;
       let subjects: string[] | null = null;
-      if (stress < 0) subjects = ["tracks.>"];
-      else if (stress > 0) subjects = (await api.topTiles(stress)).tiles.map((t) => t.subject);
+      if (stress < 0) subjects = [source.firehose];
+      else if (stress > 0) subjects = (await source.top(stress)).map((t) => t.subject);
       const c = map.getCenter();
       tracking.post({ type: "override", subjects, origin: lonLatToMerc(c.lng, c.lat) });
       live.realtimeSince = performance.now();
@@ -71,8 +71,8 @@ export function useTrackingActions() {
     },
     flyTo,
     async flyToHottest() {
-      const top = await api.topTiles(1);
-      if (top.tiles[0]) flyTo(top.tiles[0].lon, top.tiles[0].lat, 14);
+      const [top] = await source.top(1);
+      if (top) flyTo(top.lon, top.lat, 14);
     },
   };
 }

@@ -1,13 +1,17 @@
 // Tracks worker: owns the NATS WebSocket connection, the subscriptions and the track table, so
 // decoding never competes with rendering on the UI thread. It ships the GPU instance buffer to
 // the UI thread as transferable ArrayBuffers (pooled; at most MAX_OUTSTANDING in flight).
+// It decodes either backend: binary tile snapshots (demo) or JSON track events (u1). For u1 it also
+// fetches the region stats and builds the cluster cells, since that list covers the whole map.
 
 import { wsconnect, type Msg, type NatsConnection, type Subscription } from "@nats-io/nats-core";
 import { STRIDE, TrackStore } from "../shared/trackStore.ts";
 import { ClockOffset, LatencyWindow } from "../shared/metrics.ts";
 import { makeClock, wallMs } from "../shared/clock.ts";
 import { subjectTileKey } from "../shared/tiles.ts";
-import type { FromWorker, SelectedFrame, ToWorker } from "../shared/protocol.ts";
+import { applyU1Event } from "../shared/u1.ts";
+import { clusterRegions, parseRegionStats, topRegions, type RegionStats } from "../shared/regions.ts";
+import type { Backend, FromWorker, Query, SelectedFrame, ToWorker } from "../shared/protocol.ts";
 
 const ctx = self as unknown as {
   postMessage(message: FromWorker, transfer?: Transferable[]): void;
@@ -20,6 +24,8 @@ const MAX_OUTSTANDING = 3; // frame buffers in flight to the UI thread
 const UPLOAD_BUDGET_BPS = 50e6; // adapt the frame rate so huge stores do not flood the UI thread
 
 let nc: NatsConnection | null = null;
+let backend: Backend = "demo";
+let statsUrl = "";
 let clock = () => 0;
 const store = new TrackStore();
 let staleSec = 1.5;
@@ -27,6 +33,9 @@ let staleFactor = 1.5;
 let intervalS = 1;
 
 const subs = new Map<string, { sub: Subscription; lingerUntil: number }>();
+// tile keys of the subscribed subjects (lingering ones included), for track.leave
+const subKeys = new Set<number>();
+let wildcard = false;
 let wanted: string[] = [];
 let override: string[] | null = null;
 let selectedId: number | null = null;
@@ -44,20 +53,33 @@ let slowConsumer = 0;
 const latency = new LatencyWindow();
 const clockOffset = new ClockOffset();
 
+const listening = (key: number) => wildcard || subKeys.has(key);
+
+/** Decodes one message into the store: tracks updated and publish time (unix ms), or null if malformed. */
+function decode(msg: Msg, now: number): { tracks: number; publishedAt: number } | null {
+  if (backend === "u1") {
+    const r = applyU1Event(msg.data, subjectTileKey(msg.subject), now, store, listening);
+    return r && { tracks: r.type === "track.update" ? 1 : 0, publishedAt: r.timestampMs };
+  }
+  const r = store.ingest(msg.data, now);
+  if (!r.header) return null;
+  if (r.header.intervalMs && r.header.intervalMs / 1000 !== intervalS) setInterval_(r.header.intervalMs / 1000);
+  return { tracks: r.tracks, publishedAt: r.header.publishedAt };
+}
+
 function onMsg(err: Error | null, msg: Msg) {
   if (err) return;
   const recvWall = wallMs();
   const t = performance.now();
-  const r = store.ingest(msg.data, clock());
-  if (!r.header) {
+  const r = decode(msg, clock());
+  if (!r) {
     bad++;
     return;
   }
   m.msgs++;
   m.tracks += r.tracks;
   m.bytes += msg.data.byteLength;
-  latency.add(recvWall + clockOffset.offsetMs - r.header.publishedAt);
-  if (r.header.intervalMs && r.header.intervalMs / 1000 !== intervalS) setInterval_(r.header.intervalMs / 1000);
+  if (r.publishedAt) latency.add(recvWall + clockOffset.offsetMs - r.publishedAt);
   const dt = performance.now() - t;
   m.decodeMs += dt;
   m.busyMs += dt;
@@ -79,6 +101,17 @@ function applyTopics() {
     else subs.set(s, { sub: nc.subscribe(s, { callback: onMsg }), lingerUntil: 0 });
   }
   for (const [s, e] of subs) if (!want.has(s) && e.lingerUntil === 0) e.lingerUntil = now + LINGER_S;
+  indexSubs();
+}
+
+function indexSubs() {
+  subKeys.clear();
+  wildcard = false;
+  for (const s of subs.keys()) {
+    const k = subjectTileKey(s);
+    if (k >= 0) subKeys.add(k);
+    else if (s.includes(">") || s.includes("*")) wildcard = true;
+  }
 }
 
 function expireLingering(now: number) {
@@ -90,13 +123,17 @@ function expireLingering(now: number) {
       (dropped ??= new Set()).add(subjectTileKey(s));
     }
   }
-  if (dropped) store.dropTiles(dropped);
+  if (dropped) {
+    store.dropTiles(dropped);
+    indexSubs();
+  }
 }
 
 function setOverride(list: string[] | null) {
   override = list;
   for (const e of subs.values()) e.sub.unsubscribe();
   subs.clear();
+  indexSubs();
   store.clear();
   frameDirty = true;
   applyTopics();
@@ -151,6 +188,9 @@ function frameLoop() {
 
 function reportStats() {
   const lat = latency.take();
+  // u1 events carry no publish interval: measure it, so the glide matches the real report rate
+  const measured = store.takeUpdateInterval();
+  if (backend === "u1" && measured && Math.abs(measured - intervalS) > 0.1 * intervalS) setInterval_(measured);
   post({
     type: "stats",
     stats: {
@@ -164,6 +204,7 @@ function reportStats() {
       framesPerSec: m.frames,
       framesSkipped: m.skipped,
       frameBytes: m.frames ? m.frameBytes / m.frames : 0,
+      updateIntervalMs: intervalS * 1000,
       latency: lat,
       clockOffsetMs: clockOffset.offsetMs,
       clockRttMs: clockOffset.rttMs,
@@ -209,11 +250,14 @@ async function connect(url: string, user: string, pass: string) {
   }
   post({ type: "status", state: "connected", detail: nc.getServer() });
   applyTopics();
-  void syncClock(6);
-  setInterval(() => {
-    clockOffset.rttMs = Infinity; // re-estimate periodically: clocks drift
-    void syncClock(3);
-  }, 30_000);
+  // only the demo backend runs the svc.time responder
+  if (backend === "demo") {
+    void syncClock(6);
+    setInterval(() => {
+      clockOffset.rttMs = Infinity; // re-estimate periodically: clocks drift
+      void syncClock(3);
+    }, 30_000);
+  }
   (async () => {
     for await (const s of nc!.status()) {
       switch (s.type) {
@@ -238,10 +282,53 @@ async function connect(url: string, user: string, pass: string) {
   })();
 }
 
+let regions: { at: number; stats: RegionStats } | null = null;
+let regionsLoading: Promise<RegionStats> | null = null;
+
+/** The latest u1 region stats, fetched again when older than one publish interval. */
+function regionStats(): Promise<RegionStats> {
+  if (regions && performance.now() - regions.at < intervalS * 900) return Promise.resolve(regions.stats);
+  regionsLoading ??= fetch(statsUrl)
+    .then(async (r) => {
+      if (!r.ok) throw new Error(`regions/stats: ${r.status} ${await r.text()}`);
+      const stats = parseRegionStats(await r.json());
+      regions = { at: performance.now(), stats };
+      return stats;
+    })
+    .finally(() => {
+      regionsLoading = null;
+    });
+  return regionsLoading;
+}
+
+async function answer(reqId: number, q: Query) {
+  try {
+    let data: unknown;
+    switch (q.q) {
+      case "pick": {
+        const s = store.pick(q.mx, q.my, q.radius, clock());
+        data = s >= 0 ? store.ids[s] : null;
+        break;
+      }
+      case "clusters":
+        data = clusterRegions(await regionStats(), q.bbox, q.level);
+        break;
+      case "top":
+        data = topRegions(await regionStats(), q.limit);
+        break;
+    }
+    post({ type: "reply", reqId, data });
+  } catch (e) {
+    post({ type: "reply", reqId, error: String(e) });
+  }
+}
+
 ctx.onmessage = (e) => {
   const msg = e.data;
   switch (msg.type) {
     case "init":
+      backend = msg.backend;
+      statsUrl = msg.statsUrl;
       clock = makeClock(msg.epochMs);
       staleFactor = msg.staleFactor;
       setInterval_(msg.intervalMs / 1000);
@@ -262,11 +349,9 @@ ctx.onmessage = (e) => {
       selectedId = msg.id;
       frameDirty = true;
       break;
-    case "pick": {
-      const s = store.pick(msg.mx, msg.my, msg.radius, clock());
-      post({ type: "picked", reqId: msg.reqId, id: s >= 0 ? store.ids[s] : null });
+    case "query":
+      void answer(msg.reqId, msg.query);
       break;
-    }
     case "release":
       outstanding = Math.max(0, outstanding - 1);
       if (pool.length < MAX_OUTSTANDING) pool.push(msg.buf);

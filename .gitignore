@@ -3,4 +3,5 @@ dist/
 frontend/bench/out/
 .tmp/
 *.log
+*.local
 fe-monorepo/

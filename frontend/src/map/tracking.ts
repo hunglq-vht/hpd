@@ -4,9 +4,10 @@
 // nothing per-frame goes through React.
 
 import type { FeatureCollection, Point } from "geojson";
-import { natsUrl, type AppConfig } from "../api.ts";
+import { natsUrl, u1Api, type AppConfig } from "../api.ts";
 import { makeClock, wallMs } from "../shared/clock.ts";
-import type { FromWorker, ToWorker, WorkerStats } from "../shared/protocol.ts";
+import type { FromWorker, QueryFn, ToWorker, WorkerStats } from "../shared/protocol.ts";
+import { createTrackSource, type TrackSource } from "../source.ts";
 import type { TrackInfo } from "../shared/trackStore.ts";
 import { TrackLayer } from "./TrackLayer.ts";
 
@@ -32,7 +33,7 @@ export interface UiState {
   zoom: number;
   status: { state: string; detail?: string };
   cluster: { level: number; inView: number; total: number; cells: number } | null;
-  topics: { count: number; viewportTiles: number; expectedTracks: number; viewportTracks: number; truncated: boolean } | null;
+  topics: { count: number; viewportTiles: number | null; expectedTracks: number | null; truncated: boolean } | null;
   worker: WorkerStats | null;
   main: MainStats | null;
   selected: (TrackInfo & { ageMs: number }) | null;
@@ -85,6 +86,7 @@ export interface SelState {
 
 export interface Tracking {
   readonly cfg: AppConfig;
+  readonly source: TrackSource;
   readonly store: Store<UiState>;
   /** shared-clock seconds; the worker and the shader use the same time base */
   readonly clock: () => number;
@@ -92,6 +94,8 @@ export interface Tracking {
   /** non-reactive values shared by the map hooks */
   readonly live: { sel: SelState | null; realtimeSince: number };
   post(m: ToWorker, transfer?: Transferable[]): void;
+  /** Asks the worker; resolves with its reply. */
+  query: QueryFn;
   /** Nearest displayed track within `radius` (mercator units), found by the worker. */
   pick(mx: number, my: number, radius: number): Promise<number | null>;
   select(id: number | null): void;
@@ -107,8 +111,8 @@ export function createTracking(cfg: AppConfig, margin: number): Tracking {
     margin, stress: 0, clusters: EMPTY, realtimeReady: false, error: null,
   });
   const live: Tracking["live"] = { sel: null, realtimeSince: 0 };
-  const picks = new Map<number, (id: number | null) => void>();
-  let pickSeq = 0;
+  const pending = new Map<number, { resolve: (data: never) => void; reject: (e: Error) => void }>();
+  let reqSeq = 0;
 
   const worker = new Worker(new URL("../worker/tracks.worker.ts", import.meta.url), { type: "module", name: "tracks" });
   const post = (m: ToWorker, transfer: Transferable[] = []) => worker.postMessage(m, transfer);
@@ -134,30 +138,38 @@ export function createTracking(cfg: AppConfig, margin: number): Tracking {
         (window as unknown as { __perf: unknown }).__perf = { ...m.stats, main: s.main, mode: s.mode, topics: s.topics };
         store.set({ worker: m.stats });
         break;
-      case "picked":
-        picks.get(m.reqId)?.(m.id);
-        picks.delete(m.reqId);
+      case "reply": {
+        const p = pending.get(m.reqId);
+        pending.delete(m.reqId);
+        if (m.error !== undefined) p?.reject(new Error(m.error));
+        else p?.resolve(m.data as never);
         break;
+      }
     }
   };
   post({
-    type: "init", url: natsUrl(cfg), user: cfg.nats.user, pass: cfg.nats.pass, epochMs,
+    type: "init", backend: cfg.backend, url: natsUrl(cfg), user: cfg.nats.user, pass: cfg.nats.pass, epochMs,
     intervalMs: cfg.publishIntervalMs, staleFactor: cfg.staleFactor,
+    statsUrl: cfg.backend === "u1" ? u1Api.statsUrl(cfg) : "",
   });
+
+  const query: QueryFn = (q) =>
+    new Promise((resolve, reject) => {
+      const reqId = ++reqSeq;
+      pending.set(reqId, { resolve, reject });
+      post({ type: "query", reqId, query: q });
+    });
 
   return {
     cfg,
+    source: createTrackSource(cfg, query),
     store,
     clock: makeClock(epochMs),
     layer,
     live,
     post,
-    pick: (mx, my, radius) =>
-      new Promise((resolve) => {
-        const reqId = ++pickSeq;
-        picks.set(reqId, resolve);
-        post({ type: "pick", reqId, mx, my, radius });
-      }),
+    query,
+    pick: (mx, my, radius) => query({ q: "pick", mx, my, radius }),
     select(id) {
       live.sel = null;
       post({ type: "select", id });

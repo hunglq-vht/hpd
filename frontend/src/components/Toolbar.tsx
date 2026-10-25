@@ -12,7 +12,7 @@ const MARGINS: { v: number; label: string }[] = [
 
 export function Toolbar() {
   const s = useUiState();
-  const { cfg } = useTracking();
+  const { cfg, source } = useTracking();
   const actions = useTrackingActions();
   const total = s.cluster?.total;
   const connected = s.status.state === "connected";
@@ -34,7 +34,7 @@ export function Toolbar() {
         <span className={`dot ${connected ? "ok" : s.status.state === "error" ? "bad" : "warn"}`} title={`NATS ${s.status.state} ${s.status.detail ?? ""}`} />
       </header>
 
-      <ModeLine s={s} />
+      <ModeLine s={s} firehose={source.firehose} />
 
       <div className="row">
         <label className="field">
@@ -72,7 +72,7 @@ export function Toolbar() {
         </div>
       </div>
 
-      <label className="field" title="Ignore the viewport and subscribe to the densest tiles, or to tracks.> (every drone)">
+      <label className="field" title={`Ignore the viewport and subscribe to the densest tiles, or to ${source.firehose} (every drone)`}>
         <span>Stress test</span>
         <select value={s.stress} onChange={(e) => void actions.setStress(Number(e.target.value))}>
           <option value={0}>Off (viewport topics)</option>
@@ -89,19 +89,23 @@ export function Toolbar() {
   );
 }
 
-function ModeLine({ s }: { s: UiState }) {
+function ModeLine({ s, firehose }: { s: UiState; firehose: string }) {
   if (s.mode === "stress")
     return (
       <div className="mode stress">
-        <b>STRESS</b> {s.stress < 0 ? "tracks.>" : `densest ${s.stress} tiles`} · {compact(s.worker?.tracks ?? 0)} in memory
+        <b>STRESS</b> {s.stress < 0 ? firehose : `densest ${s.stress} tiles`} · {compact(s.worker?.tracks ?? 0)} in memory
       </div>
     );
-  if (s.mode === "realtime")
+  if (s.mode === "realtime") {
+    const inView = s.topics?.viewportTiles;
+    const expected = s.topics?.expectedTracks;
     return (
       <div className="mode realtime">
-        <b>REALTIME</b> {s.topics?.count ?? 0} topics ({s.topics?.viewportTiles ?? 0} in view) · ~{compact(s.topics?.expectedTracks ?? 0)} tracks
+        <b>REALTIME</b> {s.topics?.count ?? 0} topics{inView != null && ` (${inView} in view)`} ·{" "}
+        {expected != null ? `~${compact(expected)}` : compact(s.worker?.tracks ?? 0)} tracks
       </div>
     );
+  }
   return (
     <div className="mode cluster">
       <b>CLUSTERS</b> z{s.zoom.toFixed(1)} → L{s.cluster?.level ?? "–"} · {s.cluster?.cells ?? 0} cells · {compact(s.cluster?.inView ?? 0)} in view

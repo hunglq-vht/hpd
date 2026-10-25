@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import MapGL, { MapProvider, NavigationControl, ScaleControl } from "react-map-gl/maplibre";
 import * as maplibregl from "maplibre-gl";
-import { api, type AppConfig } from "./api.ts";
+import { loadConfig, type AppConfig } from "./api.ts";
 import { ClusterLayers } from "./map/ClusterLayers.tsx";
 import { DroneLayer } from "./map/DroneLayer.tsx";
 import { MapInteractions } from "./map/MapInteractions.tsx";
@@ -19,7 +19,7 @@ export default function App() {
   const [cfg, setCfg] = useState<AppConfig | null>(null);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
-    api.config().then(setCfg, (e: Error) => setError(e.message));
+    loadConfig().then(setCfg, (e: Error) => setError(e.message));
   }, []);
   if (!cfg)
     return (

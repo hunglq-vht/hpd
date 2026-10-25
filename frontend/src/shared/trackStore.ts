@@ -2,7 +2,8 @@
 //
 // * Struct-of-arrays keyed by slot; a Map gives id -> slot. Removal is swap-with-last, so slots
 //   0..n-1 are always dense and can be drawn with one instanced draw call.
-// * `ingest` decodes a tile snapshot straight from the NATS payload into "pending" fields.
+// * `ingest` decodes a binary tile snapshot (demo backend) straight from the NATS payload into
+//   "pending" fields; `put` writes one decoded JSON report (u1 backend) into the same fields.
 // * `commit` turns pending updates into GPU interpolation segments: each track animates from the
 //   position it is currently displayed at to its newest reported position over `interp` seconds.
 // * `inst` is the GPU instance buffer (float32, positions relative to an origin so that float32
@@ -27,11 +28,34 @@ export interface TrackInfo {
   speed: number;
   heading: number; // degrees
   kind: number;
-  battery: number;
+  battery: number | null; // percent; null when the backend does not report it
+  trackNo: number;
+  mode3a: string | null;
+  model: string | null;
+  updatedAt: number | null; // server time of the report, unix ms
   lastSeen: number; // shared-clock seconds
   tileX: number;
   tileY: number;
 }
+
+/** One decoded report for `put`. Decoders reuse one object, so decoding allocates nothing per track. */
+export interface TrackReport {
+  id: number;
+  mx: number;
+  my: number;
+  alt: number;
+  heading: number; // radians
+  speed: number;
+  kind: number;
+  battery: number; // percent, BATTERY_UNKNOWN when not reported
+  tile: number;
+  trackNo: number;
+  mode3a: string;
+  model: string;
+  updatedAt: number; // unix ms, 0 = unknown
+}
+
+export const BATTERY_UNKNOWN = 255;
 
 export interface IngestResult {
   header: TileHeader | null;
@@ -57,6 +81,15 @@ export class TrackStore {
   kind!: Uint8Array; battery!: Uint8Array; flags!: Uint8Array;
   lastSeen!: Float64Array;
   tile!: Int32Array;
+  trackNo!: Float64Array;
+  updatedAt!: Float64Array;
+  mode3a!: Uint32Array; model!: Uint32Array; // indexes into `strings`, 0 = none
+  /** Text values (Model, Mode3a) repeat across tracks, so slots store an index into this table. */
+  readonly strings: string[] = [""];
+  private stringIds = new Map<string, number>([["", 0]]);
+  // seconds between consecutive reports of the same track, summed for takeUpdateInterval()
+  private gapSum = 0;
+  private gapN = 0;
   dirty!: Int32Array;
   dirtyN = 0;
   inst!: Float32Array;
@@ -71,7 +104,8 @@ export class TrackStore {
     const f64 = (a?: Float64Array) => { const b = new Float64Array(cap); if (a) b.set(a.subarray(0, n)); return b; };
     const f32 = (a?: Float32Array) => { const b = new Float32Array(cap); if (a) b.set(a.subarray(0, n)); return b; };
     const u8 = (a?: Uint8Array) => { const b = new Uint8Array(cap); if (a) b.set(a.subarray(0, n)); return b; };
-    this.ids = (() => { const b = new Uint32Array(cap); if (this.ids) b.set(this.ids.subarray(0, n)); return b; })();
+    const u32 = (a?: Uint32Array) => { const b = new Uint32Array(cap); if (a) b.set(a.subarray(0, n)); return b; };
+    this.ids = u32(this.ids);
     this.px = f64(this.px); this.py = f64(this.py);
     this.cx = f64(this.cx); this.cy = f64(this.cy);
     this.nx = f64(this.nx); this.ny = f64(this.ny);
@@ -79,6 +113,8 @@ export class TrackStore {
     this.ph = f32(this.ph); this.h = f32(this.h); this.nh = f32(this.nh);
     this.alt = f32(this.alt); this.speed = f32(this.speed);
     this.kind = u8(this.kind); this.battery = u8(this.battery); this.flags = u8(this.flags);
+    this.trackNo = f64(this.trackNo); this.updatedAt = f64(this.updatedAt);
+    this.mode3a = u32(this.mode3a); this.model = u32(this.model);
     this.tile = (() => { const b = new Int32Array(cap); if (this.tile) b.set(this.tile.subarray(0, n)); return b; })();
     const dirty = new Int32Array(cap);
     if (this.dirty) dirty.set(this.dirty.subarray(0, this.dirtyN));
@@ -99,7 +135,7 @@ export class TrackStore {
     const key = (x << header.zoom) | y;
     if (this.n + count > this.cap) this.grow(Math.max(this.cap * 2, this.n + count));
 
-    const { slotOf, nx, ny, nh, alt, speed, kind, battery, lastSeen, tile, flags, dirty } = this;
+    const { slotOf, nx, ny, nh, alt, speed, kind, battery, lastSeen, tile, flags, dirty, trackNo, updatedAt } = this;
     let o = HEADER_SIZE;
     for (let i = 0; i < count; i++, o += RECORD_SIZE) {
       const id = dv.getUint32(o, true);
@@ -119,12 +155,80 @@ export class TrackStore {
       battery[s] = data[o + 15];
       lastSeen[s] = now;
       tile[s] = key;
+      trackNo[s] = id;
+      updatedAt[s] = header.publishedAt;
       if (!(flags[s] & F_DIRTY)) {
         flags[s] |= F_DIRTY;
         dirty[this.dirtyN++] = s;
       }
     }
     return { header, tracks: count };
+  }
+
+  /** Writes one decoded report into the pending fields. `now` is the shared clock in seconds. */
+  put(r: TrackReport, now: number) {
+    let s = this.slotOf.get(r.id);
+    if (s === undefined) {
+      if (this.n === this.cap) this.grow(this.cap * 2);
+      s = this.n++;
+      this.ids[s] = r.id;
+      this.slotOf.set(r.id, s);
+      this.flags[s] = F_NEW;
+    } else {
+      const gap = now - this.lastSeen[s];
+      if (gap > 0.05 && gap < 3 * this.interp) {
+        this.gapSum += gap;
+        this.gapN++;
+      }
+    }
+    this.nx[s] = r.mx;
+    this.ny[s] = r.my;
+    this.alt[s] = r.alt;
+    this.nh[s] = r.heading;
+    this.speed[s] = r.speed;
+    this.kind[s] = r.kind;
+    this.battery[s] = r.battery;
+    this.lastSeen[s] = now;
+    this.tile[s] = r.tile;
+    this.trackNo[s] = r.trackNo;
+    this.mode3a[s] = this.intern(r.mode3a);
+    this.model[s] = this.intern(r.model);
+    this.updatedAt[s] = r.updatedAt;
+    if (!(this.flags[s] & F_DIRTY)) {
+      this.flags[s] |= F_DIRTY;
+      this.dirty[this.dirtyN++] = s;
+    }
+  }
+
+  /**
+   * Track `id` left region `from` for region `to`. With `keep` (the client still listens to `to`)
+   * it stays, since its next report comes from there; otherwise the next evict drops it. A leave
+   * from a region the track has already moved out of (its update from `to` came first) is ignored.
+   */
+  leave(id: number, from: number, to: number, keep: boolean): boolean {
+    const s = this.slotOf.get(id);
+    if (s === undefined || this.tile[s] !== from) return false;
+    if (keep) this.tile[s] = to;
+    else this.lastSeen[s] = -Infinity;
+    return true;
+  }
+
+  /** Mean seconds between reports of the same track since the last call, or 0 with too few samples. */
+  takeUpdateInterval(): number {
+    const v = this.gapN >= 20 ? this.gapSum / this.gapN : 0;
+    this.gapSum = 0;
+    this.gapN = 0;
+    return v;
+  }
+
+  private intern(v: string): number {
+    let i = this.stringIds.get(v);
+    if (i === undefined) {
+      i = this.strings.length;
+      this.strings.push(v);
+      this.stringIds.set(v, i);
+    }
+    return i;
   }
 
   /** Starts new interpolation segments for every track updated since the last commit. */
@@ -191,6 +295,8 @@ export class TrackStore {
       this.alt[s] = this.alt[last]; this.speed[s] = this.speed[last];
       this.kind[s] = this.kind[last]; this.battery[s] = this.battery[last]; this.flags[s] = this.flags[last];
       this.tile[s] = this.tile[last];
+      this.trackNo[s] = this.trackNo[last]; this.updatedAt[s] = this.updatedAt[last];
+      this.mode3a[s] = this.mode3a[last]; this.model[s] = this.model[last];
       this.inst.copyWithin(s * STRIDE, last * STRIDE, last * STRIDE + STRIDE);
       this.slotOf.set(this.ids[s], s);
     }
@@ -252,7 +358,9 @@ export class TrackStore {
     return {
       id, slot: s, mx, my, lon: mx * 360 - 180, lat,
       alt: this.alt[s], speed: this.speed[s], heading: (this.nh[s] * 180) / Math.PI,
-      kind: this.kind[s], battery: this.battery[s], lastSeen: this.lastSeen[s],
+      kind: this.kind[s], battery: this.battery[s] === BATTERY_UNKNOWN ? null : this.battery[s],
+      trackNo: this.trackNo[s], mode3a: this.strings[this.mode3a[s]] || null, model: this.strings[this.model[s]] || null,
+      updatedAt: this.updatedAt[s] || null, lastSeen: this.lastSeen[s],
       tileX: this.tile[s] >> 13, tileY: this.tile[s] & 8191,
     };
   }

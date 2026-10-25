@@ -33,13 +33,17 @@ export const tileKey = (x: number, y: number) => (x << TOPIC_ZOOM) | y;
 
 export const subjectFor = (x: number, y: number) => `tracks.${TOPIC_ZOOM}.${x}.${y}`;
 
-/** Parses "tracks.13.<x>.<y>" into a tile key, or -1. */
+/**
+ * Parses a subject ending in "<z>.<x>.<y>" into a tile key, or -1 unless z is the topic zoom.
+ * Any prefix works: "tracks.13.<x>.<y>" (demo) and "u1.track.region.xyz.13.<x>.<y>" (u1).
+ */
 export function subjectTileKey(subject: string): number {
   const p = subject.split(".");
-  if (p.length !== 4 || p[1] !== String(TOPIC_ZOOM)) return -1;
-  const x = Number(p[2]);
-  const y = Number(p[3]);
-  return Number.isInteger(x) && Number.isInteger(y) ? tileKey(x, y) : -1;
+  if (p.length < 4 || p[p.length - 3] !== String(TOPIC_ZOOM)) return -1;
+  const x = Number(p[p.length - 2]);
+  const y = Number(p[p.length - 1]);
+  const n = 2 ** TOPIC_ZOOM;
+  return Number.isInteger(x) && Number.isInteger(y) && x >= 0 && y >= 0 && x < n && y < n ? tileKey(x, y) : -1;
 }
 
 export function statsLevel(zoom: number): number {

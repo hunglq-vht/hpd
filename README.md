@@ -90,6 +90,24 @@ npm run bench        # NATS WebSocket client benchmark (Node, same decoder as th
 npm run bench:browser -- perf --url http://localhost:3000   # the real app in Chrome
 ```
 
+### Against u1-track-manager
+
+The frontend also speaks the u1-track-manager contract: `POST tracks/subscriptions/resolve` for the
+viewport's region subjects, `GET tracks/regions/stats` for clusters, and one JSON `track.update` /
+`track.leave` event per track on `u1.track.region.xyz.13.<x>.<y>`. Settings live in
+`frontend/.env.u1`; put real credentials in `frontend/.env.u1.local` (git-ignored). Every `VITE_*`
+value ends up in the bundle, so the NATS password is readable by anyone who loads the app.
+
+```bash
+docker compose up -d nats   # restart it after pulling: viewer may now subscribe to u1.track.region.>
+cd frontend
+npm run mock:u1             # local stand-in for u1-track-manager on :8091 (3000 tracks)
+npm run dev:u1              # http://localhost:5173/?lon=105.84&lat=21.03&zoom=14
+```
+
+For a remote backend, set `TRACK_API_URL` and `NATS_WS_URL` for the Vite proxy, or absolute
+`VITE_TRACK_API_BASE` / `VITE_NATS_WS_URL` (the backend then needs CORS).
+
 ## Layout
 
 ```
@@ -101,11 +119,13 @@ backend/
   internal/monitor       per-tile 4x4 sums -> count/centroid pyramid (lock-free reads)
   internal/sim           fleet (struct-of-arrays) and publisher
 frontend/
-  src/shared             tiles, wire decoder, TrackStore (SoA, swap-remove, GPU segments), metrics
+  src/shared             tiles, wire decoder, u1 JSON decoder, region clusters, TrackStore (SoA, swap-remove, GPU segments), metrics
   src/worker             tracks.worker.ts: NATS WebSocket, subscriptions, decode, frames
   src/map                TrackLayer (WebGL2 custom layer), drone icon atlas, tracking core + React provider/hooks,
                          map components (DroneLayer, ViewportSync, MapInteractions, ClusterLayers)
   src/components         toolbar, performance HUD, selected-track form
+  src/source.ts          demo / u1 backend behind one interface (clusters, topics, densest regions)
+  mock/u1-mock.ts        local stand-in for u1-track-manager (HTTP + NATS JSON events)
   bench                  ws-bench.ts (Node), browser-bench.ts (Playwright + Chrome)
 nats/nats.conf           websocket, limits, users and permissions
 docs/                    implementation, assessment, protocol, performance

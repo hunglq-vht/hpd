@@ -33,6 +33,7 @@ export function PerfHud() {
           <Row k="Clock offset" v={w && isFinite(w.clockRttMs) ? `${n1(w.clockOffsetMs)} ms (rtt ${n1(w.clockRttMs)})` : "–"} />
           <h3>Worker → GPU</h3>
           <Row k="Tracks in memory" v={w ? n0(w.tracks) : "–"} />
+          <Row k="Update interval" v={w ? `${n0(w.updateIntervalMs)} ms` : "–"} />
           <Row k="Frames posted" v={w ? `${w.framesPerSec} /s${w.framesSkipped ? ` (${w.framesSkipped} skipped)` : ""}` : "–"} />
           <Row k="GPU upload" v={m ? `${n1(m.uploadMBps)} MB/s · ${m.uploadMsAvg.toFixed(2)} ms` : "–"} />
           <Row k="Draw (CPU)" v={m ? `${m.drawMsAvg.toFixed(2)} ms` : "–"} />

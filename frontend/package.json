@@ -5,7 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:u1": "vite --mode u1",
     "build": "tsc --noEmit && vite build",
+    "build:u1": "tsc --noEmit && vite build --mode u1",
+    "mock:u1": "node mock/u1-mock.ts",
     "typecheck": "tsc --noEmit",
     "preview": "vite preview",
     "test": "node --test src/shared/*.test.ts",

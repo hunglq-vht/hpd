@@ -1,11 +1,12 @@
 // Keeps the data source in step with the camera. Below realtimeMinZoom it loads cluster stats
 // (after every debounced camera change and every tick); from there up it sends the worker the NATS
-// subjects covering the viewport. A new prefetch margin or stress mode re-runs it.
+// subjects covering the viewport. A new prefetch margin or stress mode re-runs it. Both backends
+// sit behind tracking.source (source.ts).
 
 import { useEffect } from "react";
 import { useMap } from "react-map-gl/maplibre";
-import { api, type BBox } from "../api.ts";
-import { lonLatToMerc, statsLevel } from "../shared/tiles.ts";
+import type { BBox } from "../api.ts";
+import { lonLatToMerc } from "../shared/tiles.ts";
 import { useTracking, useUiSelector } from "./TrackingProvider.tsx";
 import { compact, type Mode } from "./tracking.ts";
 
@@ -17,7 +18,7 @@ export function ViewportSync() {
 
   useEffect(() => {
     const map = mapRef.getMap();
-    const { cfg, store, layer, live, post } = tracking;
+    const { cfg, source, store, layer, live, post } = tracking;
     const life = new AbortController();
     let abort: AbortController | null = null;
     let reqSeq = 0;
@@ -37,7 +38,7 @@ export function ViewportSync() {
     };
 
     const loadClusters = async (zoom: number, signal: AbortSignal, seq: number) => {
-      const stats = await api.stats(bbox(), zoom, signal);
+      const stats = await source.clusters(bbox(), zoom, signal);
       if (seq !== reqSeq || store.get().mode !== "cluster") return;
       const features = stats.cells.map(([x, y, count, lon, lat]) => ({
         type: "Feature" as const,
@@ -47,7 +48,7 @@ export function ViewportSync() {
       }));
       store.set({
         clusters: { type: "FeatureCollection", features },
-        cluster: { level: statsLevel(zoom), inView: stats.inView, total: stats.total, cells: stats.cells.length },
+        cluster: { level: stats.level, inView: stats.inView, total: stats.total, cells: stats.cells.length },
         error: null,
       });
     };
@@ -61,9 +62,9 @@ export function ViewportSync() {
         return;
       }
       const d = 0.0005;
-      const t = await api.topics([info.lon - d, info.lat - d, info.lon + d, info.lat + d], cfg.realtimeMinZoom, 0, signal);
+      const t = await source.topics([info.lon - d, info.lat - d, info.lon + d, info.lat + d], cfg.realtimeMinZoom, 0, signal);
       if (seq !== reqSeq) return;
-      post({ type: "topics", subjects: t.topics.map((x) => x.subject), origin: [info.mx, info.my] });
+      post({ type: "topics", subjects: t.subjects, origin: [info.mx, info.my] });
     };
 
     const refresh = async () => {
@@ -84,11 +85,11 @@ export function ViewportSync() {
       try {
         if (mode === "stress") return;
         if (mode === "realtime") {
-          const t = await api.topics(bbox(), zoom, margin, signal);
+          const t = await source.topics(bbox(), zoom, margin, signal);
           if (seq !== reqSeq) return;
-          post({ type: "topics", subjects: t.topics.map((x) => x.subject), origin: center() });
+          post({ type: "topics", subjects: t.subjects, origin: center() });
           store.set({
-            topics: { count: t.topics.length, viewportTiles: t.viewportTiles, expectedTracks: t.expectedTracks, viewportTracks: t.viewportTracks, truncated: t.truncated },
+            topics: { count: t.subjects.length, viewportTiles: t.viewportTiles, expectedTracks: t.expectedTracks, truncated: t.truncated },
             error: null,
           });
           // clusters stay on screen until the first live frame (or 2 s) to avoid a blank map
