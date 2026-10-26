@@ -2,3 +2,5 @@ node_modules
 dist
 bench/out
 *.log
+# local credentials (.env.u1.local) must never enter an image or the build cache
+*.local

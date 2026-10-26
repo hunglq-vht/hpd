@@ -103,6 +103,13 @@ test("malformed events are rejected", () => {
   assert.equal(s.n, 0);
 });
 
+test("state_updated_at (ms, sent by the dev server) is preferred over the whole-second timestamp", () => {
+  const s = new TrackStore();
+  const ev = JSON.parse(update(1, 105.84, 21.03));
+  ev.state_updated_at = 1730000000437;
+  assert.equal(applyU1Event(JSON.stringify(ev), -1, 0, s, all)?.timestampMs, 1730000000437);
+});
+
 test("numeric strings are accepted, and the subject gives the tile when the region is missing", () => {
   const s = new TrackStore();
   const ev = JSON.stringify({ type: "track.update", timestamp: 1, track: { ID: "9", Latitude: "21.03", Longitude: 105.84, Mode3a: 7700 } });

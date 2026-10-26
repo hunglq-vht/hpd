@@ -31,6 +31,7 @@ const store = new TrackStore();
 let staleSec = 1.5;
 let staleFactor = 1.5;
 let intervalS = 1;
+let configuredIntervalS = 1;
 
 const subs = new Map<string, { sub: Subscription; lingerUntil: number }>();
 // tile keys of the subscribed subjects (lingering ones included), for track.leave
@@ -188,9 +189,13 @@ function frameLoop() {
 
 function reportStats() {
   const lat = latency.take();
-  // u1 events carry no publish interval: measure it, so the glide matches the real report rate
-  const measured = store.takeUpdateInterval();
-  if (backend === "u1" && measured && Math.abs(measured - intervalS) > 0.1 * intervalS) setInterval_(measured);
+  // u1 events carry no publish interval: measure it, so the glide matches the real report rate.
+  // A client that falls behind also sees longer gaps, so stay within 0.5-2x of the configured value.
+  const raw = store.takeUpdateInterval();
+  if (backend === "u1" && raw) {
+    const measured = Math.min(2 * configuredIntervalS, Math.max(0.5 * configuredIntervalS, raw));
+    if (Math.abs(measured - intervalS) > 0.1 * intervalS) setInterval_(measured);
+  }
   post({
     type: "stats",
     stats: {
@@ -290,7 +295,7 @@ function regionStats(): Promise<RegionStats> {
   if (regions && performance.now() - regions.at < intervalS * 900) return Promise.resolve(regions.stats);
   regionsLoading ??= fetch(statsUrl)
     .then(async (r) => {
-      if (!r.ok) throw new Error(`regions/stats: ${r.status} ${await r.text()}`);
+      if (!r.ok) throw new Error(`Cluster counts unavailable: GET tracks/regions/stats answered ${r.status} ${(await r.text()).trim()}`);
       const stats = parseRegionStats(await r.json());
       regions = { at: performance.now(), stats };
       return stats;
@@ -319,7 +324,7 @@ async function answer(reqId: number, q: Query) {
     }
     post({ type: "reply", reqId, data });
   } catch (e) {
-    post({ type: "reply", reqId, error: String(e) });
+    post({ type: "reply", reqId, error: e instanceof Error ? e.message : String(e) });
   }
 }
 
@@ -331,7 +336,8 @@ ctx.onmessage = (e) => {
       statsUrl = msg.statsUrl;
       clock = makeClock(msg.epochMs);
       staleFactor = msg.staleFactor;
-      setInterval_(msg.intervalMs / 1000);
+      configuredIntervalS = msg.intervalMs / 1000;
+      setInterval_(configuredIntervalS);
       void connect(msg.url, msg.user, msg.pass);
       setTimeout(frameLoop, 33);
       setInterval(reportStats, 1000);

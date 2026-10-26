@@ -15,6 +15,8 @@ open its info form, a pulsing ring and camera follow.
 * **Assessment of the approach** (advantages, drawbacks, mitigations): [`docs/ASSESSMENT.md`](docs/ASSESSMENT.md)
 * **The tiling agreement, subjects, binary format and HTTP API**: [`docs/PROTOCOL.md`](docs/PROTOCOL.md)
 * **Measured performance of the frontend listening to NATS**: [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md)
+* **Step-by-step plan to bring this into fe-monorepo `apps/utm`**: [`docs/FE-MONOREPO-INTEGRATION-PLAN.md`](docs/FE-MONOREPO-INTEGRATION-PLAN.md)
+* **Hands-on guide for that plan, with checked code per step**: [`docs/FE-MONOREPO-IMPLEMENTATION-GUIDE.md`](docs/FE-MONOREPO-IMPLEMENTATION-GUIDE.md)
 
 ## Architecture
 
@@ -107,6 +109,13 @@ npm run dev:u1              # http://localhost:5173/?lon=105.84&lat=21.03&zoom=1
 
 For a remote backend, set `TRACK_API_URL` and `NATS_WS_URL` for the Vite proxy, or absolute
 `VITE_TRACK_API_BASE` / `VITE_NATS_WS_URL` (the backend then needs CORS).
+
+The real u1-track-manager sits behind SSO. Put a dev account in `frontend/.env.u1.local`
+(`U1_AUTH_URL`, `U1_USERNAME`, `U1_PASSWORD`, plus `TRACK_API_URL`). These variables have no `VITE_`
+prefix, so only the Vite dev server reads them (`frontend/dev/u1-sso.ts`). It logs in with the
+OAuth2 password grant, keeps the token in memory, renews it before it expires or after a 401, and
+adds `Authorization: Bearer` to proxied `/u1-track-manager` requests. The browser, the bundle and git
+never see the token. This is for development only; a production build uses the SSO cookie.
 
 ## Layout
 

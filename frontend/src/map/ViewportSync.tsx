@@ -63,7 +63,7 @@ export function ViewportSync() {
       }
       const d = 0.0005;
       const t = await source.topics([info.lon - d, info.lat - d, info.lon + d, info.lat + d], cfg.realtimeMinZoom, 0, signal);
-      if (seq !== reqSeq) return;
+      if (seq !== reqSeq || t.overLimit) return; // its region alone is over the limit
       post({ type: "topics", subjects: t.subjects, origin: [info.mx, info.my] });
     };
 
@@ -87,11 +87,20 @@ export function ViewportSync() {
         if (mode === "realtime") {
           const t = await source.topics(bbox(), zoom, margin, signal);
           if (seq !== reqSeq) return;
-          post({ type: "topics", subjects: t.subjects, origin: center() });
-          store.set({
-            topics: { count: t.subjects.length, viewportTiles: t.viewportTiles, expectedTracks: t.expectedTracks, truncated: t.truncated },
-            error: null,
-          });
+          if (t.overLimit) {
+            // refused: keep the current subscriptions, which are within the limits, and say why
+            const prev = store.get().topics;
+            store.set({
+              topics: { count: prev?.count ?? 0, viewportTiles: null, expectedTracks: prev?.expectedTracks ?? null, truncated: false, overLimit: t.overLimit },
+              error: null,
+            });
+          } else {
+            post({ type: "topics", subjects: t.subjects, origin: center() });
+            store.set({
+              topics: { count: t.subjects.length, viewportTiles: t.viewportTiles, expectedTracks: t.expectedTracks, truncated: t.truncated, overLimit: null },
+              error: null,
+            });
+          }
           // clusters stay on screen until the first live frame (or 2 s) to avoid a blank map
           if (!store.get().realtimeReady && performance.now() - live.realtimeSince > 2000) store.set({ realtimeReady: true });
         } else {

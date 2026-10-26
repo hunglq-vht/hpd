@@ -7,7 +7,7 @@ import type { FeatureCollection, Point } from "geojson";
 import { natsUrl, u1Api, type AppConfig } from "../api.ts";
 import { makeClock, wallMs } from "../shared/clock.ts";
 import type { FromWorker, QueryFn, ToWorker, WorkerStats } from "../shared/protocol.ts";
-import { createTrackSource, type TrackSource } from "../source.ts";
+import { createTrackSource, type OverLimit, type TrackSource } from "../source.ts";
 import type { TrackInfo } from "../shared/trackStore.ts";
 import { TrackLayer } from "./TrackLayer.ts";
 
@@ -33,7 +33,7 @@ export interface UiState {
   zoom: number;
   status: { state: string; detail?: string };
   cluster: { level: number; inView: number; total: number; cells: number } | null;
-  topics: { count: number; viewportTiles: number | null; expectedTracks: number | null; truncated: boolean } | null;
+  topics: { count: number; viewportTiles: number | null; expectedTracks: number | null; truncated: boolean; overLimit: OverLimit | null } | null;
   worker: WorkerStats | null;
   main: MainStats | null;
   selected: (TrackInfo & { ageMs: number }) | null;

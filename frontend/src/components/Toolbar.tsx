@@ -1,4 +1,5 @@
 import { compact, type UiState } from "../map/tracking.ts";
+import type { OverLimit } from "../source.ts";
 import { useTracking, useTrackingActions, useUiState } from "../map/TrackingProvider.tsx";
 import { CITIES } from "../cities.ts";
 
@@ -84,9 +85,17 @@ export function Toolbar() {
 
       {s.mode === "cluster" && <p className="hint">Zoom to 13+ or click a cluster to see individual drones.</p>}
       {s.mode !== "cluster" && s.topics?.truncated && <p className="hint warn">Topic list capped at {cfg.maxTopics} tiles.</p>}
+      {s.mode !== "cluster" && s.topics?.overLimit && <p className="hint warn">{overLimitText(s.topics.overLimit)}</p>}
       {s.error && <p className="hint bad">{s.error}</p>}
     </section>
   );
+}
+
+function overLimitText(o: OverLimit): string {
+  const max = o.max.toLocaleString();
+  if (o.limit === "max_partitions") return `${o.regions} regions in view, over the limit of ${max}. Zoom in to see live tracks.`;
+  if (o.regions <= 1) return `This region alone has about ${compact(o.estimated)} tracks, over the limit of ${max}, so it cannot be shown live.`;
+  return `About ${compact(o.estimated)} tracks in ${o.regions} regions, over the limit of ${max}. Zoom in to see live tracks.`;
 }
 
 function ModeLine({ s, firehose }: { s: UiState; firehose: string }) {

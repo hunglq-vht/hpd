@@ -9,12 +9,22 @@ import type { QueryFn } from "./shared/protocol.ts";
 import type { ClusterResult } from "./shared/regions.ts";
 import { MAX_LAT, statsLevel } from "./shared/tiles.ts";
 
+/** The server refused the view: it needs more tracks or regions than the client's limits allow. */
+export interface OverLimit {
+  limit: string; // "max_cached_tracks" or "max_partitions"
+  max: number;
+  estimated: number; // tracks
+  regions: number;
+}
+
 export interface TopicsResult {
   subjects: string[];
   /** null when the backend does not say */
   viewportTiles: number | null;
   expectedTracks: number | null;
   truncated: boolean;
+  /** u1: set instead of subjects when the server refused the view */
+  overLimit: OverLimit | null;
 }
 
 export interface TrackSource {
@@ -33,8 +43,13 @@ export function createTrackSource(cfg: AppConfig, query: QueryFn): TrackSource {
     return {
       clusters: (bbox, zoom) => query({ q: "clusters", bbox, level: statsLevel(zoom) }),
       async topics(bbox, zoom, margin, signal) {
-        const subjects = await u1Api.resolve(cfg, grow(bbox, margin), zoom, signal);
-        return { subjects, viewportTiles: null, expectedTracks: null, truncated: subjects.length >= cfg.maxTopics };
+        const r = await u1Api.resolve(cfg, grow(bbox, margin), zoom, signal);
+        if (!r.ok) {
+          const overLimit = { limit: r.limit, max: r.max, estimated: r.estimatedTracks, regions: r.partitions };
+          return { subjects: [], viewportTiles: null, expectedTracks: null, truncated: false, overLimit };
+        }
+        // the server refuses rather than truncates, so a returned list is always complete
+        return { subjects: r.topics, viewportTiles: r.partitions, expectedTracks: r.estimatedTracks, truncated: false, overLimit: null };
       },
       top: (limit) => query({ q: "top", limit }),
       firehose: `${cfg.subjectPrefix}.>`,
@@ -47,7 +62,7 @@ export function createTrackSource(cfg: AppConfig, query: QueryFn): TrackSource {
     },
     async topics(bbox, zoom, margin, signal) {
       const t = await api.topics(bbox, zoom, margin, signal);
-      return { subjects: t.topics.map((x) => x.subject), viewportTiles: t.viewportTiles, expectedTracks: t.expectedTracks, truncated: t.truncated };
+      return { subjects: t.topics.map((x) => x.subject), viewportTiles: t.viewportTiles, expectedTracks: t.expectedTracks, truncated: t.truncated, overLimit: null };
     },
     top: async (limit) => (await api.topTiles(limit)).tiles,
     firehose: `${cfg.subjectPrefix}.>`,

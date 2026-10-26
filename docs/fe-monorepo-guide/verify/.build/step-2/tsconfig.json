@@ -1,0 +1,46 @@
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "lib": [
+      "ES2023",
+      "DOM",
+      "DOM.Iterable"
+    ],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "jsx": "react-jsx",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "typeRoots": [
+      "D:\\HPDMB\\docs\\fe-monorepo-guide\\verify\\node_modules\\@types"
+    ],
+    "types": [
+      "geojson",
+      "node"
+    ],
+    "baseUrl": ".",
+    "paths": {
+      "@platform/utm/*": [
+        "apps/utm/src/*"
+      ],
+      "@platform/lib/*": [
+        "packages/lib/src/*"
+      ],
+      "zustand": [
+        "zustand.ts"
+      ],
+      "vite-plus/test": [
+        "vite-plus-test.ts"
+      ],
+      "@playwright/test": [
+        "D:\\HPDMB\\docs\\fe-monorepo-guide\\verify\\node_modules\\playwright-core"
+      ]
+    }
+  },
+  "include": [
+    "apps/**/*.ts",
+    "apps/**/*.tsx"
+  ]
+}

@@ -11,7 +11,7 @@
     "mock:u1": "node mock/u1-mock.ts",
     "typecheck": "tsc --noEmit",
     "preview": "vite preview",
-    "test": "node --test src/shared/*.test.ts",
+    "test": "node --test src/shared/*.test.ts dev/*.test.ts",
     "bench": "node bench/ws-bench.ts",
     "bench:browser": "node bench/browser-bench.ts"
   },

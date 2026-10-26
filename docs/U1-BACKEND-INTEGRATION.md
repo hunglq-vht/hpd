@@ -16,8 +16,9 @@ This file covers how the HPDMB frontend was changed to work with the u1-track-ma
 4. [Environment variables](#environment-variables)
 5. [How to run](#how-to-run)
 6. [Test results](#test-results)
-7. [Backend suggestions](#backend-suggestions)
-8. [Assumptions and open questions](#assumptions-and-open-questions)
+7. [Real dev server](#real-dev-server)
+8. [Backend suggestions](#backend-suggestions)
+9. [Assumptions and open questions](#assumptions-and-open-questions)
 
 ---
 
@@ -114,12 +115,28 @@ All values are set at build time. Every `VITE_*` value ends up in the JavaScript
 | `VITE_TRACK_API_BASE` | `/u1-track-manager` | Base URL of u1-track-manager |
 | `VITE_TRACK_SUBJECT_PREFIX` | `u1.track.region` | Prefix before `.xyz.<z>.<x>.<y>`. Used for the "all regions" subject. |
 | `VITE_NATS_WS_URL` | (same origin `/nats`) | NATS WebSocket URL |
-| `VITE_NATS_USER` / `VITE_NATS_PASS` | `viewer` / `viewer` in `.env.u1` | NATS login |
+| `VITE_NATS_USER` / `VITE_NATS_PASS` | `viewer` / `viewer` in `.env.u1` (local mock). The real values go in `.env.u1.local`. | NATS login |
 | `VITE_TRACK_INTERVAL_MS` | 1000 | Publish interval used until the worker has measured it |
 | `VITE_TRACK_STALE_FACTOR` | 3 | A silent track is removed after this many intervals |
 | `VITE_MAX_PARTITIONS` / `VITE_MAX_CACHED_TRACKS` | 36 / 4000 | `limits` sent to resolve |
 
-Shell variables for the Vite dev proxy: `TRACK_API_URL` (default `http://localhost:8091`) and `NATS_WS_URL` (default `ws://localhost:8080`).
+Dev-server-only variables, without the `VITE_` prefix, so they never reach the bundle. Set them in the shell or in `.env.u1.local`:
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `TRACK_API_URL` | `http://localhost:8091` (the mock) | Target of the `/u1-track-manager` proxy, e.g. `https://dev.utm.io.vn` |
+| `NATS_WS_URL` | `ws://localhost:8080` | Target of the `/nats` proxy |
+| `U1_AUTH_URL` | (none) | SSO realm, e.g. `https://dev.utm.io.vn/utm-qg`; tokens come from `<U1_AUTH_URL>/oauth2/token` |
+| `U1_USERNAME` / `U1_PASSWORD` | (none, which turns SSO off) | Dev account for the password grant |
+
+### Credentials and SSO
+
+- **Where secrets live:** `frontend/.env.u1` holds only local-mock defaults and is tracked by git. Real values go in `frontend/.env.u1.local`, which git (`*.local` in `.gitignore`) and the Docker build (`.dockerignore`) both ignore. Vite loads it after `.env.u1`, so its values win.
+- **How SSO works in development:** `frontend/dev/u1-sso.ts` runs in the Vite dev server only. It logs in with the OAuth2 password grant, the same endpoints as fe-monorepo's direct-password-grant mode. It keeps the tokens in memory. It renews the access token a minute before expiry (using the refresh token first, then a new login) and again after the API answers 401. It sets `Authorization: Bearer` on proxied `/u1-track-manager` requests and removes the browser's cookies from them.
+- **What stays hidden:** the browser, the bundle, git and the disk never see the token or the SSO password. A failed login returns `502 {"message": "dev SSO login failed: <server's reason>"}`.
+- **Limits:**
+  - The NATS password is still a `VITE_*` value, so it is in the bundle. NATS sends credentials inside the WebSocket stream, so the proxy cannot add them. The fix is on the backend: NATS accepting the SSO token, or per-user NATS credentials.
+  - The password grant is for development only. Production should use the SSO cookie on the same domain as the API.
 
 ## How to run
 
@@ -131,6 +148,8 @@ npm run dev:u1              # http://localhost:5173/?lon=105.84&lat=21.03&zoom=1
 ```
 
 For a remote backend, set `TRACK_API_URL` and `NATS_WS_URL` for the dev proxy. Alternatively, set absolute `VITE_TRACK_API_BASE` / `VITE_NATS_WS_URL`; the backend then needs CORS.
+
+For the real dev server, fill in `U1_USERNAME` and `U1_PASSWORD` in `.env.u1.local` and uncomment `TRACK_API_URL=https://dev.utm.io.vn` there. Then `npm run mock:u1` is no longer needed. The dev server logs `[u1-sso] logged in as <user>; valid for N s` on the first API call.
 
 ## Test results
 
@@ -151,9 +170,84 @@ For a remote backend, set `TRACK_API_URL` and `NATS_WS_URL` for the dev proxy. A
 
 **Not tested:**
 
-- The real u1-track-manager.
+- The real HTTP API (resolve and region stats). It needs SSO; see [Real dev server](#real-dev-server).
 - The new `nats.conf` rule. The Docker command line hangs on this machine, so NATS could not be restarted to load it. For the test, the mock published under the prefix `tracks.u1.track.region`, which the old `viewer` permission (`tracks.>`) allows.
-- NATS reconnects in u1 mode.
+
+## Real dev server
+
+Tested on 2026-10-26 from the same laptop, with the `monitor` NATS user from `.env.u1`.
+
+### Connection
+
+| Finding | Detail |
+|---|---|
+| URL needs a trailing slash | `wss://dev.utm.io.vn/nats-websocket/` works. Without the slash, the proxy accepts the WebSocket but never connects it to NATS: no `INFO` greeting, no error, and the client times out. |
+| Server | `dev-k8s-71-u1-nats-0`, NATS 2.11.7, `max_payload` 1 MB |
+| Permissions | `monitor` may subscribe to `u1.track.region.>`; a browser on `localhost` is accepted |
+| HTTP API | `https://dev.utm.io.vn/u1-track-manager/tracks/...` needs SSO (`401 SSO: unauthorized` without it). With the dev-server SSO login, resolve works; see [Resolve on the dev server](#resolve-on-the-dev-server). |
+
+### Message format, compared with the spec
+
+| Field | Spec | Real |
+|---|---|---|
+| `state_updated_at` (top level) | not in the spec | Unix ms. The decoder now prefers it for latency over the whole-second `timestamp`. |
+| `track.Model` | string | Missing, so every icon is a quadcopter |
+| `track.Quantity` | not in the spec | `1` |
+| `track.Mode3a` | `"7400"` (squawk code) | Registration-like text, e.g. `"27-E-3969-KI"`, so the emergency-code icon never applies |
+| `track.CreatedAt` / `UpdatedAt` | seconds | `CreatedAt` in ms, `UpdatedAt` in seconds |
+
+The app's decoder accepted every message (0 rejected out of over 200k). IDs are stable: each `Mode3a` always has the same ID, and each track reports once per second.
+
+### Volume
+
+| Subscription | Tracks | Messages/s | Data | Result |
+|---|---|---|---|---|
+| One region (`6502.3605`), app in Chrome | ~2,200 | ~2,230 | ~830 KB/s | Fine: worker 7–12 % busy, 55–60 fps, 0 reconnects, measured interval 1,000 ms |
+| 16 resolved topics at zoom 14 over central Hanoi (default limits) | ~100k reporting at 1 Hz in the 9 active regions | received 8–10k | about 3.5 MB/s received | Overload: delay grows by about 1 s each second, and NATS drops the connection as a slow consumer after ~13 s, then again after reconnecting. The browser was not the limit (worker 20–30 % busy, 60 fps). |
+
+- **Region size:** one z13 region holds 2,500–20,000 tracks, so choosing regions cannot keep a view under `max_cached_tracks` (4,000).
+- **Receive limit:** about 3.5 MB/s is the most this laptop received from the server. I don't know whether the limit is this network, the ingress or NATS.
+- **Delay:** about 0.9 s between `state_updated_at` and arrival on a single region, including any clock difference between the server and this laptop.
+
+### Resolve on the dev server
+
+Checked through the dev-server SSO login on 2026-10-26.
+
+| Request | Answer |
+|---|---|
+| View inside one quiet region, limits 36 / 4,000 | `200`: `{effective_partition, viewport_with_buffer, partition_count: 1, estimated_cached_tracks: 2612, topics: [...], resolved_at}` |
+| A zoom-13 view over central Hanoi (15 regions) | `422 SUBSCRIPTION_LIMIT_EXCEEDED`, `limit: "max_cached_tracks"`, `required.estimated_cached_tracks: 99996`, `required.partition_count: 0` |
+| The same view with `max_cached_tracks` 200,000 | `200` with all 15 topics |
+| The same view with `max_partitions` 1 | `422`, `limit: "max_partitions"`, `required.partition_count: 15` |
+| A view inside region 6503.3606 | `422`: 21,106 tracks. One region alone is over 4,000, so it can never be shown live. |
+| `preferred_partition.zoom` 14, 15, 16 or 17 | `400 partition zoom N not supported (only 13)` |
+| `GET tracks/regions/stats` and similar paths | `400 {"error":" invalid id"}`, so it is not deployed, and cluster view cannot work against this server |
+
+- **No neighbour ring:** resolve returns only the regions the viewport touches (`viewport_with_buffer` equals the viewport). The prefetch margin therefore matters, and it costs track budget.
+- **Refuses rather than trims:** over a limit, the server answers 422 instead of returning a shorter list.
+- **Limits come from the client:** a client could ask for more, but this connection already fell behind at about 10k tracks/s (see [Volume](#volume)). So 4,000 stays.
+
+How the frontend now handles this:
+
+- `readResolve()` in `src/shared/regions.ts` reads either answer. A track-count refusal reports 0 partitions, so the regions are counted from the bbox.
+- On a refusal, `ViewportSync` keeps the current subscriptions (they are within the limits).
+- The toolbar explains the refusal, for example "About 66k tracks in 12 regions, over the limit of 4,000. Zoom in to see live tracks." When the view lies in one region, it says that region alone is over the limit, so it cannot be shown live.
+- After a successful resolve, the toolbar shows the server's `estimated_cached_tracks` and `partition_count`.
+- When region stats fail, cluster view says why ("Cluster counts unavailable: GET tracks/regions/stats answered 400 ...").
+- The mock now behaves like the dev server: no ring, the same 422 and 400 answers, the same response fields.
+- Tested in Chrome against the dev server: a quiet region was live (about 2.3k tracks); the zoom-13 view and the dense region showed the two hints; cluster view showed the stats message; no page errors.
+
+### Fixes made from these findings
+
+- `.env.u1`: the trailing slash on the NATS URL.
+- `src/shared/u1.ts`: prefers `state_updated_at` (ms) as the send time; one new test.
+- `src/worker/tracks.worker.ts`: the measured update interval now stays within 0.5–2× of `VITE_TRACK_INTERVAL_MS`. Under overload the gaps between messages grow, the measured interval had climbed to 7.8 s, and the store grew to 88k tracks.
+- `mock/u1-mock.ts`: retries the NATS connection itself and logs when NATS is unreachable.
+
+### Open points
+
+- **Credentials:** done. The real NATS values moved to `frontend/.env.u1.local`, and `.env.u1` is back to the mock defaults. The real password was never committed.
+- **SSO:** done for development (see [Credentials and SSO](#credentials-and-sso)). Tested against a fake OAuth2 server and a fake API: token injection, one login for many requests, renewal after a 401, a clear 502 on a wrong password, nothing added without an account, and no SSO values in a production build. Still untested against the real dev server, because no dev account has been provided yet. Ask the backend team whether u1-track-manager accepts this Bearer token.
 
 ## Backend suggestions
 
@@ -168,17 +262,19 @@ Same browser, same laptop:
 
 At the 4000-drone limit, JSON costs about 13 % of one CPU core in the worker. That is acceptable at 4000, but it is the upper limit of what this format can handle.
 
+The real dev feed confirms it: about 100k tracks at 1 Hz and about 386 B each in central Hanoi is about 38 MB/s. One connection received only about 3.5 MB/s and was dropped as a slow consumer. The same tracks in the demo's 16 B binary format would be about 1.6 MB/s.
+
 ### Suggestions, in order of value
 
 | # | Suggestion | Effort | Why |
 |---|---|---|---|
 | 1 | Send `timestamp` and `UpdatedAt` in milliseconds | Small | Whole seconds make the latency figure meaningless: it read 180 ms in one run and 954 ms in another, only from where in the second the message was sent. Two updates in the same second also can't be put in order. |
 | 2 | Group one region's drones into one message per tick (for example a JSON array) | Medium | Removes most of the per-message overhead in NATS, the WebSocket and the client |
-| 3 | Filter `regions/stats` by viewport and zoom, and return centre points | Small | Today the client downloads the whole map every second in cluster view. Without centre points, clusters sit on a grid of tile centres. |
+| 3 | Deploy `regions/stats`, filtered by viewport and zoom, with centre points | Small | On the dev server it answers `400 invalid id`, so cluster view has no data. Unfiltered, the client would download the whole map every second; without centre points, clusters sit on a grid of tile centres. |
 | 4 | Use one subject prefix | Small | The examples use both `utm.track.region` and `u1.track.region` |
 | 5 | Return the publish interval in the resolve response | Small | The client now measures it; a declared value is simpler and exact |
-| 6 | Return more from resolve: drone count per topic, viewport or prefetch flag, a `truncated` flag | Small | The UI can show expected counts and warn when the list is cut |
-| 7 | Review `max_partitions` 36 | Small | A 1920×1080 view at zoom 13 covers about 28 regions, 54 with the ring. Either raise the limit or start live view at zoom 14. |
+| 6 | Return per-topic counts in resolve, also in a 422 refusal | Small | With per-region counts, a refused client could still subscribe to the regions near the centre that fit the limit, instead of showing nothing |
+| 7 | Review `max_partitions` 36, and partition dense areas more finely | Small to medium | A 1920×1080 view at zoom 13 covers about 28 regions, 54 with the ring. On the dev server one z13 region already holds 2,500–20,000 tracks, more than `max_cached_tracks`. Dense areas need z14/z15 regions, sampling, or a server-side cap per connection. |
 | 8 | Send the current state when a client subscribes (for example JetStream's last message per subject) | Medium | A new region stays empty for up to one tick |
 | 9 | Add a `track.end` event for drones that land or lose signal | Small | Clients can remove a drone at once instead of waiting for the timeout. This also helps the LOST_LINK state in fe-monorepo. |
 | 10 | Give each user short-lived NATS credentials (token or JWT), subscribe-only on `u1.track.region.>` | Medium | A password in `VITE_*` variables is public |
@@ -190,7 +286,7 @@ The bigger step: a binary or compact format per region, like the demo's, cuts th
 
 1. Is `ID` always a number below 2³²? Other IDs are rejected as bad messages now.
 2. Units: the frontend assumes Velocity in m/s, Heading in degrees clockwise from north, and Altitude in metres.
-3. Does resolve always add the ring of neighbour regions? The example (a small viewport gives 9 topics) suggests yes, so the u1 prefetch margin defaults to 0.
+3. ~~Does resolve add a ring of neighbour regions?~~ Answered: no. It returns only the regions the viewport touches. The u1 prefetch margin stays 0 by default, because every extra region costs track budget.
 4. Does `regions/stats` always return the whole map? The frontend assumes yes.
 5. Is the missing comma after `Velocity` in the example message a typo? The frontend assumes yes.
 6. The icon mapping from `Model` and Mode 3/A is a guess. It needs the real list of model values.

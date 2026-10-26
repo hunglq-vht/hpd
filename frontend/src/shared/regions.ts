@@ -116,3 +116,48 @@ export function topRegions(st: RegionStats, limit: number): TopTile[] {
     return { subject: st.topics[i], count: st.count[i], lon, lat };
   });
 }
+
+/** Number of z13 regions a bbox touches. */
+export function regionCount([w, s, e, n]: BBox): number {
+  const [x0, y0] = tileXY(TOPIC_ZOOM, ...lonLatToMerc(w, n));
+  const [x1, y1] = tileXY(TOPIC_ZOOM, ...lonLatToMerc(e, s));
+  return (x1 - x0 + 1) * (y1 - y0 + 1);
+}
+
+/** Answer of POST tracks/subscriptions/resolve. */
+export type ResolveResult =
+  | { ok: true; topics: string[]; partitions: number; estimatedTracks: number | null }
+  /** HTTP 422 SUBSCRIPTION_LIMIT_EXCEEDED: the view needs more than the client's limits allow */
+  | { ok: false; limit: string; max: number; estimatedTracks: number; partitions: number };
+
+interface ResolveBody {
+  topics?: unknown;
+  partition_count?: unknown;
+  estimated_cached_tracks?: unknown;
+  code?: unknown;
+  limit?: unknown;
+  limits_applied?: Record<string, unknown>;
+  required?: { estimated_cached_tracks?: unknown; partition_count?: unknown };
+}
+
+/** Reads a resolve answer for the requested bbox; null when it is neither a topic list nor a limit refusal. */
+export function readResolve(status: number, body: unknown, bbox: BBox): ResolveResult | null {
+  const b = (body ?? {}) as ResolveBody;
+  if (status >= 200 && status < 300 && Array.isArray(b.topics)) {
+    const topics = b.topics.filter((t): t is string => typeof t === "string");
+    const estimated = Number(b.estimated_cached_tracks ?? NaN);
+    return { ok: true, topics, partitions: Number(b.partition_count) || topics.length, estimatedTracks: Number.isFinite(estimated) ? estimated : null };
+  }
+  if (status === 422 && b.code === "SUBSCRIPTION_LIMIT_EXCEEDED") {
+    const limit = String(b.limit ?? "");
+    return {
+      ok: false,
+      limit,
+      max: Number(b.limits_applied?.[limit]) || 0,
+      estimatedTracks: Number(b.required?.estimated_cached_tracks) || 0,
+      // a refusal on track count reports 0 partitions, so count the regions here
+      partitions: Number(b.required?.partition_count) || regionCount(bbox),
+    };
+  }
+  return null;
+}

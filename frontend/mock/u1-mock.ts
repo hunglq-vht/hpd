@@ -111,21 +111,43 @@ function tick() {
 
 interface ResolveBody {
   viewport: { west: number; south: number; east: number; north: number };
-  limits?: { max_partitions?: number };
+  preferred_partition?: { scheme?: string; zoom?: number };
+  limits?: { max_partitions?: number; max_cached_tracks?: number };
 }
 
-/** The viewport's z13 regions plus one ring, nearest to the centre first, capped at max_partitions. */
-function resolve({ viewport: v, limits }: ResolveBody): string[] {
+/**
+ * Like the dev server (checked 2026-10-26): the viewport's z13 regions only (no neighbour ring), or
+ * HTTP 422 when they exceed max_partitions or hold more than max_cached_tracks; only zoom 13.
+ */
+function resolve({ viewport: v, preferred_partition: p, limits }: ResolveBody): [status: number, body: unknown] {
+  if (p?.zoom !== undefined && p.zoom !== TOPIC_ZOOM)
+    return [400, { code: 400, message: `partition zoom ${p.zoom} not supported (only ${TOPIC_ZOOM})` }];
   const [x0, y0] = tileXY(TOPIC_ZOOM, ...lonLatToMerc(v.west, v.north));
   const [x1, y1] = tileXY(TOPIC_ZOOM, ...lonLatToMerc(v.east, v.south));
-  const max = 2 ** TOPIC_ZOOM - 1;
-  const cx = (x0 + x1) / 2;
-  const cy = (y0 + y1) / 2;
-  const tiles: [number, number][] = [];
-  for (let x = Math.max(0, x0 - 1); x <= Math.min(max, x1 + 1); x++)
-    for (let y = Math.max(0, y0 - 1); y <= Math.min(max, y1 + 1); y++) tiles.push([x, y]);
-  tiles.sort((a, b) => Math.hypot(a[0] - cx, a[1] - cy) - Math.hypot(b[0] - cx, b[1] - cy));
-  return tiles.slice(0, limits?.max_partitions ?? 36).map(([x, y]) => subject(x, y));
+  const topics: string[] = [];
+  for (let x = x0; x <= x1; x++) for (let y = y0; y <= y1; y++) topics.push(subject(x, y));
+  const estimated = topics.reduce((sum, t) => sum + (counts.get(t) ?? 0), 0);
+  const maxPartitions = limits?.max_partitions ?? 36;
+  const maxTracks = limits?.max_cached_tracks ?? 4000;
+  const refuse = (limit: string, message: string, applied: object, partitions: number): [number, unknown] => [
+    422,
+    { code: "SUBSCRIPTION_LIMIT_EXCEEDED", limit, limits_applied: applied, message: `SUBSCRIPTION_LIMIT_EXCEEDED: ${message}`, required: { estimated_cached_tracks: estimated, partition_count: partitions } },
+  ];
+  if (topics.length > maxPartitions)
+    return refuse("max_partitions", `partition_count ${topics.length} exceeds max_partitions ${maxPartitions} (estimated tracks ${estimated})`, { max_cached_tracks: 0, max_partitions: maxPartitions }, topics.length);
+  if (estimated > maxTracks)
+    return refuse("max_cached_tracks", `estimated_cached_tracks ${estimated} exceeds max_cached_tracks ${maxTracks}`, { max_cached_tracks: maxTracks, max_partitions: 0 }, 0);
+  return [
+    200,
+    {
+      effective_partition: { scheme: REGION_SCHEME, zoom: TOPIC_ZOOM, x: 0, y: 0 },
+      viewport_with_buffer: v,
+      partition_count: topics.length,
+      estimated_cached_tracks: estimated,
+      topics,
+      resolved_at: Math.floor(Date.now() / 1000),
+    },
+  ];
 }
 
 async function readJSON<T>(req: IncomingMessage): Promise<T> {
@@ -143,23 +165,34 @@ createServer(async (req, res) => {
     if (req.method === "GET" && req.url === `${BASE}/tracks/regions/stats`)
       return send(200, { regions: [...counts].map(([topic, n]) => ({ topic, active_track_count: n })) });
     if (req.method === "POST" && req.url === `${BASE}/tracks/subscriptions/resolve`)
-      return send(200, { topics: resolve(await readJSON<ResolveBody>(req)) });
+      return send(...resolve(await readJSON<ResolveBody>(req)));
     send(404, { error: `no route for ${req.method} ${req.url}` });
   } catch (e) {
     send(400, { error: String(e) });
   }
 }).listen(PORT, () => console.log(`u1 mock: http://localhost:${PORT}${BASE}, ${TRACKS} tracks every ${TICK_MS} ms`));
 
-wsconnect({ servers: WS, user: opt("user", "backend"), pass: opt("pass", "backend-secret"), name: "u1-mock", maxReconnectAttempts: -1, waitOnFirstConnect: true })
-  .then((c) => {
-    nc = c;
-    console.log(`u1 mock: publishing to ${WS} as ${PREFIX}.xyz.13.<x>.<y>`);
-  })
-  .catch((e) => console.error(`u1 mock: NATS ${WS}: ${e}`));
+// The client's own first-connect retry (waitOnFirstConnect) never recovered when NATS started
+// after the mock, so retry here and say why nothing is published. Later drops reconnect by themselves.
+async function connectNats() {
+  for (let warned = false; ; warned = true) {
+    try {
+      nc = await wsconnect({ servers: WS, user: opt("user", "backend"), pass: opt("pass", "backend-secret"), name: "u1-mock", maxReconnectAttempts: -1 });
+      console.log(`u1 mock: publishing to ${WS} as ${PREFIX}.xyz.13.<x>.<y>`);
+      return;
+    } catch (e) {
+      const why = (e as Error).message ? ` (${(e as Error).message})` : "";
+      if (!warned) console.error(`u1 mock: cannot reach NATS at ${WS}${why}. Start it with "docker compose up -d nats"; retrying every 2 s`);
+      await new Promise((r) => setTimeout(r, 2000));
+    }
+  }
+}
+void connectNats();
 
 tick();
 setInterval(tick, TICK_MS);
 setInterval(() => {
-  console.log(`u1 mock: ${(published / 10).toFixed(0)} msgs/s, ${counts.size} regions`);
+  const state = nc ? `${(published / 10).toFixed(0)} msgs/s` : `waiting for NATS at ${WS}`;
+  console.log(`u1 mock: ${state}, ${counts.size} regions`);
   published = 0;
 }, 10_000);

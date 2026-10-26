@@ -3,7 +3,7 @@
 //  * u1:   u1-track-manager; its config comes from VITE_* env variables (frontend/.env.u1)
 
 import type { Backend } from "./shared/protocol.ts";
-import type { BBox, TopTile } from "./shared/regions.ts";
+import { readResolve, type BBox, type ResolveResult, type TopTile } from "./shared/regions.ts";
 import { REALTIME_MIN_ZOOM, STATS_LEVEL_OFFSET, TOPIC_ZOOM } from "./shared/tiles.ts";
 import { REGION_SCHEME } from "./shared/u1.ts";
 
@@ -71,8 +71,12 @@ export const api = {
 
 /** u1 backend */
 export const u1Api = {
-  /** POST tracks/subscriptions/resolve: the region subjects that cover a viewport. */
-  async resolve(cfg: AppConfig, [west, south, east, north]: BBox, zoom: number, signal?: AbortSignal): Promise<string[]> {
+  /**
+   * POST tracks/subscriptions/resolve: the region subjects that cover a viewport (no neighbour ring),
+   * or a refusal (HTTP 422) when they hold more tracks or regions than the limits sent.
+   */
+  async resolve(cfg: AppConfig, bbox: BBox, zoom: number, signal?: AbortSignal): Promise<ResolveResult> {
+    const [west, south, east, north] = bbox;
     const path = `${cfg.apiBase}/tracks/subscriptions/resolve`;
     const r = await fetch(path, {
       method: "POST",
@@ -85,9 +89,16 @@ export const u1Api = {
         limits: { max_partitions: cfg.maxTopics, max_cached_tracks: cfg.maxCachedTracks },
       }),
     });
-    if (!r.ok) throw new Error(`${path}: ${r.status} ${await r.text()}`);
-    const { topics } = (await r.json()) as { topics?: unknown };
-    return Array.isArray(topics) ? topics.filter((t): t is string => typeof t === "string") : [];
+    const text = await r.text();
+    let body: unknown = null;
+    try {
+      body = JSON.parse(text);
+    } catch {
+      // not JSON: reported below
+    }
+    const result = readResolve(r.status, body, bbox);
+    if (!result) throw new Error(`${path}: ${r.status} ${text}`);
+    return result;
   },
   /** Absolute URL of GET tracks/regions/stats, which the worker fetches. */
   statsUrl: (cfg: AppConfig) => new URL(`${cfg.apiBase}/tracks/regions/stats`, location.href).href,
@@ -110,7 +121,7 @@ function u1Config(): AppConfig {
     subjectPattern: `${prefix}.xyz.{z}.{x}.{y}`,
     publishIntervalMs: envNum(env.VITE_TRACK_INTERVAL_MS, 1000),
     staleFactor: envNum(env.VITE_TRACK_STALE_FACTOR, 3),
-    defaultMargin: 0, // resolve already adds a ring of neighbour regions
+    defaultMargin: 0, // resolve adds no neighbour ring, but every prefetched region costs track budget
     maxTopics: envNum(env.VITE_MAX_PARTITIONS, 36),
     maxCachedTracks: envNum(env.VITE_MAX_CACHED_TRACKS, 4000),
     wireVersion: 0,

@@ -1,8 +1,10 @@
 // Decoder for the u1-track-manager NATS events: JSON, one track per message, on the region subjects
 // "<prefix>.xyz.13.<x>.<y>".
-//   track.update  { type, timestamp, region, track: { ID, TrackNumber, Latitude, Longitude, Velocity,
-//                   Altitude, Heading, Model, Mode3a, UpdatedAt, CreatedAt } }
+//   track.update  { type, timestamp, state_updated_at?, region, track: { ID, TrackNumber, Latitude,
+//                   Longitude, Velocity, Altitude, Heading, Model, Mode3a, UpdatedAt, CreatedAt } }
 //   track.leave   { type, timestamp, region, leave: { track_id, to_region, updated_at } }
+// `timestamp` is in whole seconds; the dev server also sends `state_updated_at` in ms, which is
+// preferred for latency.
 // Shared by the worker, the Node tests and the mock backend, so it must stay free of DOM APIs.
 
 import { lonLatToMerc, tileKey, TOPIC_ZOOM } from "./tiles.ts";
@@ -32,7 +34,7 @@ export interface U1Track {
 }
 
 export type U1Event =
-  | { type: "track.update"; timestamp: number; region: U1Region; track: U1Track }
+  | { type: "track.update"; timestamp: number; state_updated_at?: number; region: U1Region; track: U1Track }
   | { type: "track.leave"; timestamp: number; region: U1Region; leave: { track_id: number; to_region: U1Region; updated_at: number } };
 
 /** Mode 3/A codes for hijack, radio failure and emergency. */
@@ -97,6 +99,7 @@ export function applyU1Event(
     return null;
   }
   if (!ev || typeof ev !== "object") return null;
+  const sentMs = num(ev.state_updated_at, 0) || toMs(num(ev.timestamp, 0));
   const rk = regionKey(ev.region as Partial<U1Region>);
   const from = rk >= 0 ? rk : subjectKey;
 
@@ -123,7 +126,7 @@ export function applyU1Event(
     report.model = model;
     report.updatedAt = t.UpdatedAt === undefined ? 0 : toMs(num(t.UpdatedAt, 0));
     store.put(report, now);
-    return { type: "track.update", timestampMs: toMs(num(ev.timestamp, 0)) || report.updatedAt };
+    return { type: "track.update", timestampMs: sentMs || report.updatedAt };
   }
 
   if (ev.type === "track.leave") {
@@ -132,7 +135,7 @@ export function applyU1Event(
     if (!isId(id)) return null;
     const to = regionKey(l?.to_region);
     store.leave(id, from, to, to >= 0 && listening(to));
-    return { type: "track.leave", timestampMs: toMs(num(ev.timestamp, 0)) };
+    return { type: "track.leave", timestampMs: sentMs };
   }
   return null;
 }

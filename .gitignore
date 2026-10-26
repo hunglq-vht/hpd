@@ -4,4 +4,4 @@ frontend/bench/out/
 .tmp/
 *.log
 *.local
-fe-monorepo/
+fe-monorepo/docs/fe-monorepo-guide/verify/.build/
