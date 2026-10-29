@@ -40,7 +40,7 @@ test("kind comes from emergency Mode 3/A codes, then from the model", () => {
 test("track.update fills the store with the u1 fields", () => {
   const s = new TrackStore();
   const r = applyU1Event(update(7, 105.84, 21.03), -1, 10, s, all);
-  assert.deepEqual(r, { type: "track.update", timestampMs: 1730000000000 });
+  assert.deepEqual(r, { type: "track.update", tracks: 1, timestampMs: 1730000000000 });
   s.commit(10);
   const t = s.info(7)!;
   const [mx, my] = lonLatToMerc(105.84, 21.03);
@@ -117,4 +117,22 @@ test("numeric strings are accepted, and the subject gives the tile when the regi
   const t = s.info(9)!;
   assert.equal(t.kind, 3);
   assert.equal(s.tile[t.slot], HERE);
+});
+
+test("track.batch (u1 simulator) applies every valid track of a region, then its departures", () => {
+  const s = new TrackStore();
+  applyU1Event(update(3, 105.84, 21.03), -1, 0, s, all);
+  s.commit(0);
+  const track = (id: number) => JSON.parse(update(id, 105.84, 21.03)).track;
+  const batch = JSON.stringify({
+    type: "track.batch", timestamp: 1730000000500, state_updated_at: 1730000000437, region: region(6504, 3606),
+    tracks: [track(1), track(2), { ID: -1 }],
+    leaves: [{ track_id: 3, to_region: region(6505, 3606), updated_at: 1730000000 }],
+  });
+  const r = applyU1Event(batch, -1, 1, s, none);
+  assert.deepEqual(r, { type: "track.batch", tracks: 2, timestampMs: 1730000000437 });
+  s.commit(1);
+  assert.equal(s.tile[s.info(1)!.slot], HERE);
+  assert.equal(s.evict(0), 1, "track 3 left for a region we do not listen to");
+  assert.equal(applyU1Event(JSON.stringify({ type: "track.batch", tracks: "none" }), -1, 0, s, all), null);
 });

@@ -2,7 +2,8 @@
 // backend:
 //  * demo: GET /api/stats, /api/topics, /api/tiles/top (this repo's Go api)
 //  * u1:   POST tracks/subscriptions/resolve for the topics; the worker fetches
-//          GET tracks/regions/stats (the whole map, no bbox) and builds the clusters from it
+//          GET tracks/regions/stats (the whole map, no bbox) and builds the clusters from it.
+//          Both name the JSON subjects; for another wire format the prefix is swapped.
 
 import { api, u1Api, type AppConfig, type BBox, type TopTile } from "./api.ts";
 import type { QueryFn } from "./shared/protocol.ts";
@@ -40,6 +41,8 @@ export interface TrackSource {
 
 export function createTrackSource(cfg: AppConfig, query: QueryFn): TrackSource {
   if (cfg.backend === "u1") {
+    const from = `${cfg.topicPrefix}.`;
+    const toWire = (s: string) => (s.startsWith(from) ? `${cfg.subjectPrefix}.${s.slice(from.length)}` : s);
     return {
       clusters: (bbox, zoom) => query({ q: "clusters", bbox, level: statsLevel(zoom) }),
       async topics(bbox, zoom, margin, signal) {
@@ -49,9 +52,9 @@ export function createTrackSource(cfg: AppConfig, query: QueryFn): TrackSource {
           return { subjects: [], viewportTiles: null, expectedTracks: null, truncated: false, overLimit };
         }
         // the server refuses rather than truncates, so a returned list is always complete
-        return { subjects: r.topics, viewportTiles: r.partitions, expectedTracks: r.estimatedTracks, truncated: false, overLimit: null };
+        return { subjects: r.topics.map(toWire), viewportTiles: r.partitions, expectedTracks: r.estimatedTracks, truncated: false, overLimit: null };
       },
-      top: (limit) => query({ q: "top", limit }),
+      top: async (limit) => (await query({ q: "top", limit })).map((t) => ({ ...t, subject: toWire(t.subject) })),
       firehose: `${cfg.subjectPrefix}.>`,
     };
   }

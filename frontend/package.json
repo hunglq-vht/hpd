@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "dev:u1": "vite --mode u1",
+    "dev:u1sim": "vite --mode u1sim",
     "build": "tsc --noEmit && vite build",
     "build:u1": "tsc --noEmit && vite build --mode u1",
     "mock:u1": "node mock/u1-mock.ts",
@@ -13,7 +14,8 @@
     "preview": "vite preview",
     "test": "node --test src/shared/*.test.ts dev/*.test.ts",
     "bench": "node bench/ws-bench.ts",
-    "bench:browser": "node bench/browser-bench.ts"
+    "bench:browser": "node bench/browser-bench.ts",
+    "probe:u1": "node bench/u1-probe.ts"
   },
   "dependencies": {
     "@nats-io/nats-core": "3.4.0",

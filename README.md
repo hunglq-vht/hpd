@@ -17,6 +17,7 @@ open its info form, a pulsing ring and camera follow.
 * **Measured performance of the frontend listening to NATS**: [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md)
 * **Step-by-step plan to bring this into fe-monorepo `apps/utm`**: [`docs/FE-MONOREPO-INTEGRATION-PLAN.md`](docs/FE-MONOREPO-INTEGRATION-PLAN.md)
 * **Hands-on guide for that plan, with checked code per step**: [`docs/FE-MONOREPO-IMPLEMENTATION-GUIDE.md`](docs/FE-MONOREPO-IMPLEMENTATION-GUIDE.md)
+* **u1-track-manager stand-in, and JSON vs batched vs binary vs compressed** (`docker compose --profile u1`): [`docs/U1-SIM.md`](docs/U1-SIM.md)
 
 ## Architecture
 

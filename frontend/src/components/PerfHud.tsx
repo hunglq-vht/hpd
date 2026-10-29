@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { useUiState } from "../map/TrackingProvider.tsx";
+import { WIRE_LABELS } from "../api.ts";
+import { useTracking, useUiState } from "../map/TrackingProvider.tsx";
 
 const n0 = (v: number) => Math.round(v).toLocaleString();
 const n1 = (v: number) => v.toFixed(1);
@@ -7,6 +8,7 @@ const kb = (v: number) => (v >= 1e6 ? `${(v / 1e6).toFixed(2)} MB/s` : `${(v / 1
 
 export function PerfHud() {
   const s = useUiState();
+  const { cfg } = useTracking();
   const [open, setOpen] = useState(true);
   const w = s.worker;
   const m = s.main;
@@ -19,11 +21,15 @@ export function PerfHud() {
       {open && (
         <div className="hud-body">
           <h3>NATS → worker</h3>
+          {cfg.backend === "u1" && <Row k="Wire" v={`${WIRE_LABELS[cfg.wire.format]}${cfg.wire.compressed ? " · deflate" : ""}`} />}
           <Row k="Subscriptions" v={w ? n0(w.subscriptions) : "–"} />
           <Row k="Messages" v={w ? `${n0(w.msgsPerSec)} /s` : "–"} />
           <Row k="Track updates" v={w ? `${n0(w.tracksPerSec)} /s` : "–"} />
-          <Row k="Payload" v={w ? kb(w.bytesPerSec) : "–"} />
-          <Row k="Decode" v={w ? `${n1(w.decodeUsPerMsg)} µs/msg` : "–"} />
+          <Row k={cfg.wire.compressed ? "Payload (inflated)" : "Payload"} v={w ? kb(w.bytesPerSec) : "–"} />
+          <Row
+            k="Decode"
+            v={w ? `${n1(w.decodeUsPerMsg)} µs/msg${w.tracksPerSec ? ` · ${((w.decodeUsPerMsg * w.msgsPerSec) / w.tracksPerSec).toFixed(2)} µs/track` : ""}` : "–"}
+          />
           <Row k="Worker busy" v={w ? `${n1(w.busyMsPerSec / 10)} %` : "–"} warn={!!w && w.busyMsPerSec > 500} />
           <Row
             k="Latency p50/p99"

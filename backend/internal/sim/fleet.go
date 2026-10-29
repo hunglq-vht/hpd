@@ -43,6 +43,11 @@ type Fleet struct {
 
 // NewFleet places n drones around the hotspot cities, deterministically for a given seed.
 func NewFleet(n int, seed uint64, workers int) *Fleet {
+	return NewFleetAround(Cities, n, seed, workers)
+}
+
+// NewFleetAround is NewFleet with other hotspots; each one's Weight sets its share of the drones.
+func NewFleetAround(cities []City, n int, seed uint64, workers int) *Fleet {
 	if workers < 1 {
 		workers = 1
 	}
@@ -54,7 +59,7 @@ func NewFleet(n int, seed uint64, workers int) *Fleet {
 		Kind: make([]uint8, n), Class: make([]uint8, n), City: make([]uint16, n), Keys: make([]uint64, n),
 		Rec: make([]byte, n*wire.RecordSize),
 	}
-	for _, c := range Cities {
+	for _, c := range cities {
 		mx, my := tiles.LonLatToMerc(c.Lon, c.Lat)
 		f.geo = append(f.geo, cityGeo{mx: mx, my: my, mpm: tiles.MercPerMeter(my), sigmaM: c.SigmaKm * 1000})
 	}
@@ -63,12 +68,12 @@ func NewFleet(n int, seed uint64, workers int) *Fleet {
 	}
 
 	var wsum float64
-	for _, c := range Cities {
+	for _, c := range cities {
 		wsum += c.Weight
 	}
 	rng := rand.New(rand.NewPCG(seed, 0))
 	for i := 0; i < n; i++ {
-		f.City[i] = uint16(pickWeighted(rng, wsum))
+		f.City[i] = uint16(pickWeighted(rng, cities, wsum))
 		f.Class[i] = uint8(pickShare(rng, classShare[:]))
 		k := uint8(pickShare(rng, kindShares()))
 		f.Kind[i] = k
@@ -93,15 +98,15 @@ func kindShares() []float64 {
 	return s
 }
 
-func pickWeighted(rng *rand.Rand, wsum float64) int {
+func pickWeighted(rng *rand.Rand, cities []City, wsum float64) int {
 	r := rng.Float64() * wsum
-	for i, c := range Cities {
+	for i, c := range cities {
 		if r < c.Weight {
 			return i
 		}
 		r -= c.Weight
 	}
-	return len(Cities) - 1
+	return len(cities) - 1
 }
 
 func pickShare(rng *rand.Rand, shares []float64) int {

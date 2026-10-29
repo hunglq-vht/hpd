@@ -9,7 +9,10 @@ import { makeClock, wallMs } from "../shared/clock.ts";
 import type { FromWorker, QueryFn, ToWorker, WorkerStats } from "../shared/protocol.ts";
 import { createTrackSource, type OverLimit, type TrackSource } from "../source.ts";
 import type { TrackInfo } from "../shared/trackStore.ts";
+import { ICON_SETS, imageAtlas, loadImage, type IconSet } from "./droneAtlas.ts";
 import { TrackLayer } from "./TrackLayer.ts";
+// the UTM app's drone icon (fe-monorepo/apps/utm/src/assets/icons/drone1_out.png)
+import utmDroneIcon from "../assets/drone1_out.png";
 
 export type Mode = "cluster" | "realtime" | "stress";
 
@@ -42,6 +45,7 @@ export interface UiState {
   follow: boolean;
   margin: number;
   stress: Stress;
+  icons: IconSet;
   clusters: Clusters;
   realtimeReady: boolean;
   error: string | null;
@@ -99,6 +103,8 @@ export interface Tracking {
   /** Nearest displayed track within `radius` (mercator units), found by the worker. */
   pick(mx: number, my: number, radius: number): Promise<number | null>;
   select(id: number | null): void;
+  /** Draws the drones with another icon set and remembers the choice in this browser. */
+  setIcons(icons: IconSet): void;
   /** Terminates the worker and its NATS connection. */
   dispose(): void;
 }
@@ -108,7 +114,7 @@ export function createTracking(cfg: AppConfig, margin: number): Tracking {
   const store = createStore<UiState>({
     mode: "cluster", zoom: 0, status: { state: "connecting" }, cluster: null, topics: null, worker: null, main: null,
     selected: null, selectedId: null, selectionLost: false, follow: true,
-    margin, stress: 0, clusters: EMPTY, realtimeReady: false, error: null,
+    margin, stress: 0, icons: initialIcons(), clusters: EMPTY, realtimeReady: false, error: null,
   });
   const live: Tracking["live"] = { sel: null, realtimeSince: 0 };
   const pending = new Map<number, { resolve: (data: never) => void; reject: (e: Error) => void }>();
@@ -117,6 +123,16 @@ export function createTracking(cfg: AppConfig, margin: number): Tracking {
   const worker = new Worker(new URL("../worker/tracks.worker.ts", import.meta.url), { type: "module", name: "tracks" });
   const post = (m: ToWorker, transfer: Transferable[] = []) => worker.postMessage(m, transfer);
   const layer = new TrackLayer("tracks", (buf) => post({ type: "release", buf }, [buf]));
+  let iconSeq = 0;
+  const applyIcons = (icons: IconSet) => {
+    const seq = ++iconSeq;
+    if (icons === "drawn") return layer.setIcons(null);
+    loadImage(utmDroneIcon).then(
+      (img) => seq === iconSeq && layer.setIcons(imageAtlas(img)),
+      () => store.set({ error: `Cannot load the drone icon ${utmDroneIcon}` }),
+    );
+  };
+  applyIcons(store.get().icons);
 
   worker.onmessage = (e: MessageEvent<FromWorker>) => {
     const m = e.data;
@@ -148,7 +164,7 @@ export function createTracking(cfg: AppConfig, margin: number): Tracking {
     }
   };
   post({
-    type: "init", backend: cfg.backend, url: natsUrl(cfg), user: cfg.nats.user, pass: cfg.nats.pass, epochMs,
+    type: "init", backend: cfg.backend, format: cfg.wire.format, url: natsUrl(cfg), user: cfg.nats.user, pass: cfg.nats.pass, epochMs,
     intervalMs: cfg.publishIntervalMs, staleFactor: cfg.staleFactor,
     statsUrl: cfg.backend === "u1" ? u1Api.statsUrl(cfg) : "",
   });
@@ -175,8 +191,30 @@ export function createTracking(cfg: AppConfig, margin: number): Tracking {
       post({ type: "select", id });
       store.set({ selectedId: id, selected: null, selectionLost: false, follow: id !== null });
     },
+    setIcons(icons) {
+      store.set({ icons });
+      try {
+        localStorage.setItem(ICONS_KEY, icons);
+      } catch {
+        // storage blocked: the choice lasts until reload
+      }
+      applyIcons(icons);
+    },
     dispose: () => worker.terminate(),
   };
+}
+
+const ICONS_KEY = "drone-icons";
+
+/** ?icons=drawn|utm, else the last choice in this browser, else the drawn icons. */
+function initialIcons(): IconSet {
+  let v = new URLSearchParams(location.search).get("icons");
+  try {
+    v ??= localStorage.getItem(ICONS_KEY);
+  } catch {
+    // storage blocked
+  }
+  return ICON_SETS.find((s) => s.v === v)?.v ?? "drawn";
 }
 
 export function compact(n: number): string {

@@ -79,6 +79,7 @@ In the app this shows as drones arriving later and later, freezing, disappearing
 | Resolve answer | `{ topics }` | Also `partition_count`, `estimated_cached_tracks`, `effective_partition`, `viewport_with_buffer`, `resolved_at` |
 | Resolve over a limit | not in the spec | HTTP 422 with `code`, `limit`, `limits_applied` and `required`. It refuses rather than trims the list. |
 | Neighbour regions | not stated | None are added; only the regions the view touches |
+| Changes seen on 2026-10-28 | | `timestamp` now in ms, `Model` is `"Simulation Drone"`, a new `Serial` field equals `Mode3a`, `CreatedAt` is 0, `Quantity` 0, and every track has `Velocity` and `Heading` 0. The server sent only about 2,000 tracks in all. |
 
 ## What the backend can do
 
@@ -121,7 +122,9 @@ npm run dev:u1   # http://localhost:5173/?lon=105.7541&lat=21.06&zoom=15  (a qui
 
 Restart `npm run dev:u1` and reload the page after changing any `VITE_*` value.
 
-Without the real server, comment out `TRACK_API_URL`, start the local NATS (`docker compose up -d nats`), and run `npm run mock:u1`.
+Without the real server, or when it sends too little to load the app, run the local simulator and `npm run dev:u1sim` instead (see [U1-SIM.md](U1-SIM.md)). It also publishes a batched and a binary format, and offers a compressed WebSocket, for comparison.
+
+`npm run probe:u1` measures what arrives, second by second (`frontend/bench/u1-probe.ts`; `--local` for the simulator).
 
 ## Next steps and open questions
 

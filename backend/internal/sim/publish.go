@@ -53,6 +53,8 @@ type Publisher struct {
 	// Spread paces one tick's messages over this duration in Slices steps (0 = one burst).
 	Spread time.Duration
 	Slices int
+	// SubjectOf names a tile's subject; nil means tiles.Subject ("tracks.13.<x>.<y>").
+	SubjectOf func(x, y int) string
 }
 
 func NewPublisher(pub PublishFunc, interval time.Duration, more ...PublishFunc) *Publisher {
@@ -195,7 +197,11 @@ func (p *Publisher) publishBatch(runs []msgRun, buf []byte) (int, int64, error) 
 func (p *Publisher) subject(key uint32) string {
 	s, ok := p.subjects[key]
 	if !ok {
-		s = tiles.Subject(tiles.Unkey(key))
+		name := p.SubjectOf
+		if name == nil {
+			name = tiles.Subject
+		}
+		s = name(tiles.Unkey(key))
 		p.subjects[key] = s
 	}
 	return s

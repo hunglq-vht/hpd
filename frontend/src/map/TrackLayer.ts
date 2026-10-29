@@ -120,6 +120,9 @@ export class TrackLayer implements CustomLayerInterface {
   private interp = 1.15;
   private hasSelected = false;
   private pending: FrameData | null = null;
+  /** icon atlas; null = drawDroneAtlas() */
+  private icons: ImageData | null = null;
+  private iconsDirty = false;
   private readonly release: (buf: ArrayBuffer) => void;
 
   constructor(id: string, release: (buf: ArrayBuffer) => void) {
@@ -131,6 +134,13 @@ export class TrackLayer implements CustomLayerInterface {
   setFrame(f: FrameData) {
     if (this.pending) this.release(this.pending.buf);
     this.pending = f;
+    this.map?.triggerRepaint();
+  }
+
+  /** Replaces the icon atlas (null: the drawn icons); uploaded on the next render. */
+  setIcons(atlas: ImageData | null) {
+    this.icons = atlas;
+    this.iconsDirty = true;
     this.map?.triggerRepaint();
   }
 
@@ -157,11 +167,21 @@ export class TrackLayer implements CustomLayerInterface {
     this.vao = this.makeVao(gl, this.instVbo);
     this.selVao = this.makeVao(gl, this.selVbo);
 
-    // icon atlas, premultiplied, mipmapped; pixel-store state is restored for MapLibre
-    const img = drawDroneAtlas();
     this.tex = gl.createTexture()!;
-    gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, this.tex);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.bindTexture(gl.TEXTURE_2D, null);
+    this.uploadIcons(gl);
+  }
+
+  /** Icon atlas to the texture, premultiplied, mipmapped; pixel-store state is restored for MapLibre. */
+  private uploadIcons(gl: WebGL2RenderingContext) {
+    const img = this.icons ?? drawDroneAtlas();
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, this.tex!);
     const flip = gl.getParameter(gl.UNPACK_FLIP_Y_WEBGL);
     const pre = gl.getParameter(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL);
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
@@ -170,11 +190,8 @@ export class TrackLayer implements CustomLayerInterface {
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, flip);
     gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, pre);
     gl.generateMipmap(gl.TEXTURE_2D);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
     gl.bindTexture(gl.TEXTURE_2D, null);
+    this.iconsDirty = false;
   }
 
   private makeVao(gl: WebGL2RenderingContext, inst: WebGLBuffer) {
@@ -236,6 +253,7 @@ export class TrackLayer implements CustomLayerInterface {
   }
 
   render(gl: WebGL2RenderingContext, args: CustomRenderMethodInput) {
+    if (this.iconsDirty) this.uploadIcons(gl);
     this.upload(gl);
     if (this.mode === "none" || (this.n === 0 && !this.hasSelected)) return;
     const t = performance.now();

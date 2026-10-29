@@ -1,7 +1,10 @@
+import { WIRE_FORMATS, WIRE_LABELS } from "../api.ts";
 import { compact, type UiState } from "../map/tracking.ts";
+import type { WireFormat } from "../shared/protocol.ts";
 import type { OverLimit } from "../source.ts";
 import { useTracking, useTrackingActions, useUiState } from "../map/TrackingProvider.tsx";
 import { CITIES } from "../cities.ts";
+import { ICON_SETS } from "../map/droneAtlas.ts";
 
 const MARGINS: { v: number; label: string }[] = [
   { v: 0, label: "0" },
@@ -72,6 +75,45 @@ export function Toolbar() {
           ))}
         </div>
       </div>
+
+      <div className="row">
+        <span className="field-label" title="Drawn: one shape per drone type. UTM: the UTM app's drone icon (drone1_out.png) for every type, in the type's colour.">
+          Icons
+        </span>
+        <div className="seg" role="group" aria-label="Drone icons">
+          {ICON_SETS.map((i) => (
+            <button key={i.v} className={s.icons === i.v ? "on" : ""} onClick={() => actions.setIcons(i.v)}>
+              {i.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {cfg.backend === "u1" && (
+        <div
+          className="row"
+          title="JSON per track is what the dev server sends. JSON per region, binary and compression come only from the local simulator (backend/cmd/u1sim). Switching reloads the page at the current view."
+        >
+          <label className="field">
+            <span>Wire</span>
+            <select value={cfg.wire.format} onChange={(e) => actions.setWire(e.target.value as WireFormat, cfg.wire.compressed)}>
+              {WIRE_FORMATS.map((f) => (
+                <option key={f} value={f}>
+                  {WIRE_LABELS[f]}
+                </option>
+              ))}
+            </select>
+          </label>
+          <div className="seg" role="group" aria-label="WebSocket compression">
+            <button className={cfg.wire.compressed ? "" : "on"} onClick={() => actions.setWire(cfg.wire.format, false)}>
+              Plain
+            </button>
+            <button className={cfg.wire.compressed ? "on" : ""} onClick={() => actions.setWire(cfg.wire.format, true)}>
+              Deflate
+            </button>
+          </div>
+        </div>
+      )}
 
       <label className="field" title={`Ignore the viewport and subscribe to the densest tiles, or to ${source.firehose} (every drone)`}>
         <span>Stress test</span>

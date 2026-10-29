@@ -6,6 +6,15 @@ import type { TrackInfo } from "./trackStore.ts";
 /** demo: this repo's Go backend (binary tile snapshots). u1: u1-track-manager (JSON events). */
 export type Backend = "demo" | "u1";
 
+/**
+ * u1 wire format. The dev server sends only "json"; the local simulator (backend/cmd/u1sim) sends all
+ * three, each on its own subject prefix:
+ *  json:   one track.update per track
+ *  batch:  one track.batch per region per tick, with the same track objects
+ *  binary: the demo's 16-byte records, one tile snapshot per region (docs/PROTOCOL.md)
+ */
+export type WireFormat = "json" | "batch" | "binary";
+
 /** Requests the worker answers with a "reply" carrying the same reqId. */
 export type Query =
   | { q: "pick"; mx: number; my: number; radius: number }
@@ -24,7 +33,7 @@ export type QueryFn = <Q extends Query>(query: Q) => Promise<QueryResult[Q["q"]]
 
 export type ToWorker =
   | {
-      type: "init"; backend: Backend; url: string; user: string; pass: string;
+      type: "init"; backend: Backend; format: WireFormat; url: string; user: string; pass: string;
       epochMs: number; intervalMs: number; staleFactor: number;
       /** u1: absolute URL of GET tracks/regions/stats */
       statsUrl: string;

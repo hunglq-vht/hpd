@@ -5,6 +5,7 @@
 import { createContext, useContext, useEffect, useState, useSyncExternalStore, type ReactNode } from "react";
 import { useMap } from "react-map-gl/maplibre";
 import type { AppConfig } from "../api.ts";
+import type { WireFormat } from "../shared/protocol.ts";
 import { lonLatToMerc } from "../shared/tiles.ts";
 import { createTracking, type Stress, type Tracking, type UiState } from "./tracking.ts";
 
@@ -56,6 +57,7 @@ export function useTrackingActions() {
 
   return {
     select: tracking.select,
+    setIcons: tracking.setIcons,
     setFollow: (follow: boolean) => store.set({ follow }),
     // ViewportSync refreshes the topics when the margin or the stress mode changes
     setMargin: (margin: number) => store.set({ margin }),
@@ -68,6 +70,23 @@ export function useTrackingActions() {
       tracking.post({ type: "override", subjects, origin: lonLatToMerc(c.lng, c.lat) });
       live.realtimeSince = performance.now();
       store.set({ stress, realtimeReady: false });
+    },
+    /**
+     * u1: listen to another wire format or transport. Reloads at the current view, so each run starts
+     * with a fresh worker, connection and metrics.
+     */
+    setWire(format: WireFormat, compressed: boolean) {
+      const p = new URLSearchParams(location.search);
+      p.set("format", format);
+      if (compressed) p.set("compress", "1");
+      else p.delete("compress");
+      if (map) {
+        const c = map.getCenter();
+        p.set("lon", c.lng.toFixed(5));
+        p.set("lat", c.lat.toFixed(5));
+        p.set("zoom", map.getZoom().toFixed(2));
+      }
+      location.search = p.toString();
     },
     flyTo,
     async flyToHottest() {

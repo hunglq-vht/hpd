@@ -1,8 +1,9 @@
 // Tracks worker: owns the NATS WebSocket connection, the subscriptions and the track table, so
 // decoding never competes with rendering on the UI thread. It ships the GPU instance buffer to
 // the UI thread as transferable ArrayBuffers (pooled; at most MAX_OUTSTANDING in flight).
-// It decodes either backend: binary tile snapshots (demo) or JSON track events (u1). For u1 it also
-// fetches the region stats and builds the cluster cells, since that list covers the whole map.
+// It decodes binary tile snapshots (demo, and the u1 simulator's binary format) or JSON track events
+// (u1: one per track, or one batch per region). For u1 it also fetches the region stats and builds
+// the cluster cells, since that list covers the whole map.
 
 import { wsconnect, type Msg, type NatsConnection, type Subscription } from "@nats-io/nats-core";
 import { STRIDE, TrackStore } from "../shared/trackStore.ts";
@@ -11,7 +12,7 @@ import { makeClock, wallMs } from "../shared/clock.ts";
 import { subjectTileKey } from "../shared/tiles.ts";
 import { applyU1Event } from "../shared/u1.ts";
 import { clusterRegions, parseRegionStats, topRegions, type RegionStats } from "../shared/regions.ts";
-import type { Backend, FromWorker, Query, SelectedFrame, ToWorker } from "../shared/protocol.ts";
+import type { Backend, WireFormat, FromWorker, Query, SelectedFrame, ToWorker } from "../shared/protocol.ts";
 
 const ctx = self as unknown as {
   postMessage(message: FromWorker, transfer?: Transferable[]): void;
@@ -25,6 +26,7 @@ const UPLOAD_BUDGET_BPS = 50e6; // adapt the frame rate so huge stores do not fl
 
 let nc: NatsConnection | null = null;
 let backend: Backend = "demo";
+let format: WireFormat = "binary";
 let statsUrl = "";
 let clock = () => 0;
 const store = new TrackStore();
@@ -58,9 +60,9 @@ const listening = (key: number) => wildcard || subKeys.has(key);
 
 /** Decodes one message into the store: tracks updated and publish time (unix ms), or null if malformed. */
 function decode(msg: Msg, now: number): { tracks: number; publishedAt: number } | null {
-  if (backend === "u1") {
+  if (format !== "binary") {
     const r = applyU1Event(msg.data, subjectTileKey(msg.subject), now, store, listening);
-    return r && { tracks: r.type === "track.update" ? 1 : 0, publishedAt: r.timestampMs };
+    return r && { tracks: r.tracks, publishedAt: r.timestampMs };
   }
   const r = store.ingest(msg.data, now);
   if (!r.header) return null;
@@ -189,10 +191,10 @@ function frameLoop() {
 
 function reportStats() {
   const lat = latency.take();
-  // u1 events carry no publish interval: measure it, so the glide matches the real report rate.
+  // u1 JSON events carry no publish interval: measure it, so the glide matches the real report rate.
   // A client that falls behind also sees longer gaps, so stay within 0.5-2x of the configured value.
   const raw = store.takeUpdateInterval();
-  if (backend === "u1" && raw) {
+  if (format !== "binary" && raw) {
     const measured = Math.min(2 * configuredIntervalS, Math.max(0.5 * configuredIntervalS, raw));
     if (Math.abs(measured - intervalS) > 0.1 * intervalS) setInterval_(measured);
   }
@@ -333,6 +335,7 @@ ctx.onmessage = (e) => {
   switch (msg.type) {
     case "init":
       backend = msg.backend;
+      format = msg.format;
       statsUrl = msg.statsUrl;
       clock = makeClock(msg.epochMs);
       staleFactor = msg.staleFactor;

@@ -9,6 +9,9 @@ interface ImportMetaEnv {
   readonly VITE_TRACK_API_BASE?: string;
   /** u1: subject prefix before ".xyz.<z>.<x>.<y>" (default u1.track.region) */
   readonly VITE_TRACK_SUBJECT_PREFIX?: string;
+  /** u1 simulator: subject prefixes of the batch and binary formats (default u1.track.batch / u1.track.bin) */
+  readonly VITE_TRACK_BATCH_PREFIX?: string;
+  readonly VITE_TRACK_BINARY_PREFIX?: string;
   /** u1: expected publish interval in ms until the worker has measured it (default 1000) */
   readonly VITE_TRACK_INTERVAL_MS?: string;
   /** u1: a silent track is dropped after this many publish intervals (default 3) */
@@ -20,6 +23,8 @@ interface ImportMetaEnv {
   readonly VITE_NATS_WS_URL?: string;
   readonly VITE_NATS_USER?: string;
   readonly VITE_NATS_PASS?: string;
+  /** NATS WebSocket with compression, used with ?compress=1 (default same origin /nats-z) */
+  readonly VITE_NATS_WS_URL_COMPRESSED?: string;
   readonly VITE_API_BASE?: string;
   readonly VITE_MAP_STYLE?: string;
 }

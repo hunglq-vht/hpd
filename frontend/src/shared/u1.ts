@@ -3,7 +3,9 @@
 //   track.update  { type, timestamp, state_updated_at?, region, track: { ID, TrackNumber, Latitude,
 //                   Longitude, Velocity, Altitude, Heading, Model, Mode3a, UpdatedAt, CreatedAt } }
 //   track.leave   { type, timestamp, region, leave: { track_id, to_region, updated_at } }
-// `timestamp` is in whole seconds; the dev server also sends `state_updated_at` in ms, which is
+//   track.batch   { type, timestamp, state_updated_at, region, tracks: [track, ...],
+//                   leaves?: [{ track_id, to_region, updated_at }] }   (local simulator only)
+// `timestamp` is in seconds or ms; the dev server also sends `state_updated_at` in ms, which is
 // preferred for latency.
 // Shared by the worker, the Node tests and the mock backend, so it must stay free of DOM APIs.
 
@@ -35,7 +37,14 @@ export interface U1Track {
 
 export type U1Event =
   | { type: "track.update"; timestamp: number; state_updated_at?: number; region: U1Region; track: U1Track }
-  | { type: "track.leave"; timestamp: number; region: U1Region; leave: { track_id: number; to_region: U1Region; updated_at: number } };
+  | { type: "track.leave"; timestamp: number; region: U1Region; leave: U1Departure }
+  | { type: "track.batch"; timestamp: number; state_updated_at?: number; region: U1Region; tracks: U1Track[]; leaves?: U1Departure[] };
+
+export interface U1Departure {
+  track_id: number;
+  to_region: U1Region;
+  updated_at: number;
+}
 
 /** Mode 3/A codes for hijack, radio failure and emergency. */
 const EMERGENCY_CODES = new Set(["7500", "7600", "7700"]);
@@ -76,8 +85,45 @@ const report: TrackReport = {
 
 export interface U1Result {
   type: U1Event["type"];
+  /** track updates applied */
+  tracks: number;
   /** publish time, unix ms */
   timestampMs: number;
+}
+
+/** Puts one track object into the store; false when it has no valid id or position. */
+function putTrack(t: Partial<Record<keyof U1Track, unknown>> | undefined, tile: number, now: number, store: TrackStore): boolean {
+  if (!t || typeof t !== "object") return false;
+  const id = num(t.ID, -1);
+  const lon = num(t.Longitude, NaN);
+  const lat = num(t.Latitude, NaN);
+  if (!isId(id) || !(Math.abs(lon) <= 180) || !(Math.abs(lat) <= 90)) return false;
+  const [mx, my] = lonLatToMerc(lon, lat);
+  const model = text(t.Model);
+  const mode3a = text(t.Mode3a);
+  report.id = id;
+  report.mx = mx;
+  report.my = my;
+  report.alt = num(t.Altitude, 0);
+  report.heading = (num(t.Heading, 0) * Math.PI) / 180;
+  report.speed = num(t.Velocity, 0);
+  report.kind = kindOf(model, mode3a);
+  report.tile = tile;
+  report.trackNo = num(t.TrackNumber, id);
+  report.mode3a = mode3a;
+  report.model = model;
+  report.updatedAt = t.UpdatedAt === undefined ? 0 : toMs(num(t.UpdatedAt, 0));
+  store.put(report, now);
+  return true;
+}
+
+/** Applies a departure; false when it has no valid track id. */
+function applyLeave(l: Partial<Record<keyof U1Departure, unknown>> | undefined, from: number, store: TrackStore, listening: (key: number) => boolean): boolean {
+  const id = num(l?.track_id, -1);
+  if (!isId(id)) return false;
+  const to = regionKey(l?.to_region as Partial<U1Region> | undefined);
+  store.leave(id, from, to, to >= 0 && listening(to));
+  return true;
 }
 
 /**
@@ -104,38 +150,21 @@ export function applyU1Event(
   const from = rk >= 0 ? rk : subjectKey;
 
   if (ev.type === "track.update") {
-    const t = ev.track as Partial<Record<keyof U1Track, unknown>> | undefined;
-    if (!t) return null;
-    const id = num(t.ID, -1);
-    const lon = num(t.Longitude, NaN);
-    const lat = num(t.Latitude, NaN);
-    if (!isId(id) || !(Math.abs(lon) <= 180) || !(Math.abs(lat) <= 90)) return null;
-    const [mx, my] = lonLatToMerc(lon, lat);
-    const model = text(t.Model);
-    const mode3a = text(t.Mode3a);
-    report.id = id;
-    report.mx = mx;
-    report.my = my;
-    report.alt = num(t.Altitude, 0);
-    report.heading = (num(t.Heading, 0) * Math.PI) / 180;
-    report.speed = num(t.Velocity, 0);
-    report.kind = kindOf(model, mode3a);
-    report.tile = from;
-    report.trackNo = num(t.TrackNumber, id);
-    report.mode3a = mode3a;
-    report.model = model;
-    report.updatedAt = t.UpdatedAt === undefined ? 0 : toMs(num(t.UpdatedAt, 0));
-    store.put(report, now);
-    return { type: "track.update", timestampMs: sentMs || report.updatedAt };
+    if (!putTrack(ev.track as Partial<Record<keyof U1Track, unknown>> | undefined, from, now, store)) return null;
+    return { type: "track.update", tracks: 1, timestampMs: sentMs || report.updatedAt };
   }
 
   if (ev.type === "track.leave") {
-    const l = ev.leave as { track_id?: unknown; to_region?: Partial<U1Region> } | undefined;
-    const id = num(l?.track_id, -1);
-    if (!isId(id)) return null;
-    const to = regionKey(l?.to_region);
-    store.leave(id, from, to, to >= 0 && listening(to));
-    return { type: "track.leave", timestampMs: sentMs };
+    if (!applyLeave(ev.leave as Parameters<typeof applyLeave>[0], from, store, listening)) return null;
+    return { type: "track.leave", tracks: 0, timestampMs: sentMs };
+  }
+
+  if (ev.type === "track.batch") {
+    if (!Array.isArray(ev.tracks)) return null;
+    let n = 0;
+    for (const t of ev.tracks) if (putTrack(t, from, now, store)) n++;
+    if (Array.isArray(ev.leaves)) for (const l of ev.leaves) applyLeave(l, from, store, listening);
+    return { type: "track.batch", tracks: n, timestampMs: sentMs };
   }
   return null;
 }

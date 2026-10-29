@@ -5,7 +5,7 @@ services:
     image: nats:2.12-alpine
     command: ["-c", "/etc/nats/nats.conf"]
     volumes:
-      - ./nats/nats.conf:/etc/nats/nats.conf:ro
+      - ./nats:/etc/nats:ro   # nats.conf includes auth.conf
     ports:
       - "4222:4222"   # NATS (backend services, benchmarks)
       - "8080:8080"   # NATS WebSocket (browsers; also proxied at /nats by the web container)
@@ -36,6 +36,35 @@ services:
       DEFAULT_MARGIN: "0.5"
     ports:
       - "8090:8090"
+    depends_on: [nats]
+    restart: unless-stopped
+
+  # u1-track-manager stand-in (`docker compose --profile u1 up -d nats nats-compressed u1sim`):
+  # the resolve API on :8091 and JSON, batch and binary track messages through both WebSockets
+  nats-compressed:
+    profiles: [u1]
+    image: nats:2.12-alpine
+    command: ["-c", "/etc/nats/nats-compressed.conf"]
+    environment:
+      NATS_ROUTE: nats://nats:6222
+    volumes:
+      - ./nats:/etc/nats:ro
+    ports:
+      - "8081:8081"   # NATS WebSocket with compression
+    depends_on: [nats]
+    restart: unless-stopped
+
+  u1sim:
+    profiles: [u1]
+    build: { context: ./backend, target: u1sim }
+    image: drone-tracks/u1sim
+    environment:
+      NATS_URL: nats://backend:backend-secret@nats:4222
+      FORMATS: ${FORMATS:-json,batch,binary}
+      TICK_MS: ${TICK_MS:-1000}
+      SEED: "42"
+    ports:
+      - "8091:8091"
     depends_on: [nats]
     restart: unless-stopped
 

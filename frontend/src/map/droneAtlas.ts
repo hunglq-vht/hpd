@@ -1,11 +1,19 @@
-// Draws the drone icons (one 64x64 cell per type) into a canvas at runtime, so the app ships no
-// image assets. Every icon points north (up); the shader rotates it by heading.
+// Builds the drone icon atlas (one 64x64 cell per type) in a canvas at runtime: either shapes drawn
+// here, or one image (the UTM app's drone1_out.png) coloured per type. Every icon points north (up);
+// the shader rotates it by heading.
 
 export const ATLAS_CELL = 64;
 export const ATLAS_KINDS = 4;
 
 export const KIND_NAMES = ["Quadcopter", "Hexacopter", "Fixed-wing", "Emergency"] as const;
 export const KIND_COLORS = ["#38bdf8", "#4ade80", "#fbbf24", "#f87171"] as const;
+
+/** drawn: one shape per type (drawDroneAtlas). utm: drone1_out.png for every type (imageAtlas). */
+export type IconSet = "drawn" | "utm";
+export const ICON_SETS: { v: IconSet; label: string }[] = [
+  { v: "drawn", label: "Drawn" },
+  { v: "utm", label: "UTM" },
+];
 
 export function drawDroneAtlas(): ImageData {
   const c = document.createElement("canvas");
@@ -22,6 +30,40 @@ export function drawDroneAtlas(): ImageData {
     g.restore();
   }
   return g.getImageData(0, 0, c.width, c.height);
+}
+
+/**
+ * The atlas from one north-pointing image: its alpha is the shape, filled with each type's colour (the
+ * UTM app tints drone1_out.png the same way, and its black would not show on the dark basemap).
+ */
+export function imageAtlas(img: CanvasImageSource): ImageData {
+  const c = document.createElement("canvas");
+  c.width = ATLAS_CELL * ATLAS_KINDS;
+  c.height = ATLAS_CELL;
+  const g = c.getContext("2d")!;
+  const cell = document.createElement("canvas");
+  cell.width = cell.height = ATLAS_CELL;
+  const cg = cell.getContext("2d")!;
+  const pad = 5; // room for the shadow
+  g.shadowColor = "rgba(0,0,0,0.75)";
+  g.shadowBlur = 4;
+  for (let k = 0; k < ATLAS_KINDS; k++) {
+    cg.globalCompositeOperation = "source-over";
+    cg.clearRect(0, 0, ATLAS_CELL, ATLAS_CELL);
+    cg.drawImage(img, pad, pad, ATLAS_CELL - 2 * pad, ATLAS_CELL - 2 * pad);
+    cg.globalCompositeOperation = "source-in";
+    cg.fillStyle = KIND_COLORS[k];
+    cg.fillRect(0, 0, ATLAS_CELL, ATLAS_CELL);
+    g.drawImage(cell, k * ATLAS_CELL, 0);
+  }
+  return g.getImageData(0, 0, c.width, c.height);
+}
+
+export async function loadImage(url: string): Promise<HTMLImageElement> {
+  const img = new Image();
+  img.src = url;
+  await img.decode();
+  return img;
 }
 
 function drawMulticopter(g: CanvasRenderingContext2D, arms: number, color: string, emergency: boolean) {
